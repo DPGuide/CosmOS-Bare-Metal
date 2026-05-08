@@ -1,13 +1,86 @@
 #include "pci.h"
 #include "schneider_lang.h"
+/// ==========================================
+/// BARE METAL: DIE ECHTE 64-BIT IDT (MIT PIC REMAP)
+/// ==========================================
+#ifdef __x86_64__
+struct IDT64_Entry {
+    uint16_t offset_low;
+    uint16_t selector;
+    uint8_t ist;
+    uint8_t types_attr;
+    uint16_t offset_mid;
+    uint32_t offset_high;
+    uint32_t zero;
+} __attribute__((packed));
+
+struct IDT64_Pointer {
+    uint16_t limit;
+    uint64_t base;
+} __attribute__((packed));
+
+IDT64_Entry idt[256];
+IDT64_Pointer idtp;
+
+extern "C" void isr_trap(); /// Für CPU-Crashes (0-31)
+extern "C" void isr_hw();   /// Für Hardware wie USB/Maus (32-255)
+
+/// Mini-Helfer für die Chip-Kommunikation
+static inline void outb_idt(uint16_t port, uint8_t val) {
+    __asm__ volatile ( "outb %0, %1" : : "a"(val), "Nd"(port) );
+}
+
+void idt_set_gate(uint8_t num, uint64_t handler) {
+    uint16_t cs;
+    __asm__ volatile("mov %%cs, %0" : "=r"(cs));
+    idt[num].offset_low = (uint16_t)handler;
+    idt[num].selector = cs; 
+    idt[num].ist = 0;
+    idt[num].types_attr = 0x8E; 
+    idt[num].offset_mid = (uint16_t)(handler >> 16);
+    idt[num].offset_high = (uint32_t)(handler >> 32);
+    idt[num].zero = 0;
+}
+
+void init_idt() {
+    /// 1. PIC REMAPPING: Der wichtigste Schritt der Bare-Metal-Welt!
+    /// Verschiebt die Hardware-Interrupts weg von den CPU-Crashes auf Platz 32+
+    outb_idt(0x20, 0x11); outb_idt(0xA0, 0x11);
+    outb_idt(0x21, 0x20); outb_idt(0xA1, 0x28); /// Master auf 32 (0x20), Slave auf 40
+    outb_idt(0x21, 0x04); outb_idt(0xA1, 0x02);
+    outb_idt(0x21, 0x01); outb_idt(0xA1, 0x01);
+    outb_idt(0x21, 0x00); outb_idt(0xA1, 0x00); /// Masken auf 0: Alle IRQs durchlassen
+
+    idtp.limit = (sizeof(IDT64_Entry) * 256) - 1;
+    idtp.base = (uint64_t)&idt;
+
+    /// 2. DIE TABELLE AUFBAUEN
+    for (int i = 0; i < 32; i++) {
+        idt_set_gate(i, (uint64_t)isr_trap); /// Crash-Netz aufspannen
+    }
+    for (int i = 32; i < 256; i++) {
+        idt_set_gate(i, (uint64_t)isr_hw);   /// Hardware-Handler (Maus/Keyboard) setzen
+    }
+
+    /// 3. ZÜNDUNG
+    __asm__ volatile("lidt %0" : : "m"(idtp));
+    __asm__ volatile("sti"); /// Interrupts auf der CPU scharfschalten!
+}
+#else
+void init_idt() {} 
+#endif
 
 /// --- XHCI DMA POSTAMT (HARDCODED RAM) ---
 /// Wir reservieren uns einfach die 10-Megabyte-Marke im Arbeitsspeicher!
 /// 0x00A00000 ist exakt durch 64 teilbar (perfekt aligned) und hier stören wir niemanden.
 extern int init_xhci_probe(uint32_t bar0, int id);
-/// BARE METAL FIX: DCBAA und Command Ring MÜSSEN echte 64-Bit Arrays sein!
-uint64_t* xhci_dcbaa = (uint64_t*)0x04100000; 
-uint64_t* xhci_cmd_ring = (uint64_t*)0x04010000;
+/// BARE METAL FIX: DCBAA und Command Ring (128 MB Marke)
+uint64_t* xhci_dcbaa = (uint64_t*)0x08100000; 
+uint64_t* xhci_cmd_ring = (uint64_t*)0x08010000;
+
+/// NEU: Der Briefkasten (Event Ring & Segment Table)
+uint64_t* xhci_ev_ring = (uint64_t*)0x08020000; 
+uint64_t* xhci_erst    = (uint64_t*)0x08030000;
 /// BARE METAL FIX: Globale Zähler für die Förderbänder!
 _43 usb_out_idx = 0;
 _43 usb_in_idx = 0;
@@ -23,7 +96,7 @@ struct XHCI_TRB {
 };
 
 /// Das xHCI Kommunikations-Zentrum
-uint64_t xhci_db_base = 0;   /// BARE METAL FIX: Die Türklingel 64-Bit Safe!
+uint64_t xhci_db_base = 0;   /// <--- WICHTIG: Das hier muss xhci_db_base heißen!
 uint32_t xhci_cmd_idx = 0;   /// Aktuelle Zeile im Postausgang
 uint32_t xhci_cmd_cycle = 1; /// Das magische Toggle-Bit
 _202 OracleEntry {
@@ -32,19 +105,14 @@ _202 OracleEntry {
     _182 device;     
     _89 bar_addr;    
 };
-/// BARE METAL PLUG & PLAY: Hardware Registry
-_202 HardwareRegistry {
-    _44 is_ahci_found;
-    _89 ahci_bar5;
 
-    _44 is_usb_found;
-    _89 usb_bar0;
-
-    _44 is_net_found;
-    _89 net_bar0;
-    _89 net_io_port;
-};
-_172 HardwareRegistry sys_hw;
+#ifdef __x86_64__
+  /// Im 64-Bit Modus (OS2) ist pci.cpp der Chef und reserviert den RAM
+  HardwareRegistry sys_hw; 
+#else
+  /// Im 32-Bit Modus (OS1) ist pci.cpp nur Gast und nutzt die sys_hw aus deiner kernel.cpp
+  extern HardwareRegistry sys_hw; 
+#endif
 _172 OracleEntry oracle_db[16];
 _172 _43 oracle_entry_count;
 _172 _50 mmio_write32(_89 addr, _89 val);
@@ -88,7 +156,7 @@ _89* xhci_ep_in_ring  = (_89*)0x040A0000;
 /// ==========================================
 #ifdef __x86_64__
 /// Wir nutzen RAM bei glatt 60 Megabyte, um Kern-Kollisionen zu meiden
-uint64_t next_free_page_table = 0x03C00000; 
+uint64_t next_free_page_table = 0x07800000; 
 
 void map_mmio_64(uint64_t phys_addr) {
     uint64_t virt_addr = phys_addr;
@@ -432,8 +500,8 @@ _50 xhci_send_address_device(_184 slot_id, _184 port_id, _89 speed) {
     volatile XHCI_TRB* ring = (volatile XHCI_TRB*)0x04010000;
     
     /// 64-Bit Fix
-    ring[xhci_cmd_idx].param1 = (_89)(uint64_t)in_ctx;
-    ring[xhci_cmd_idx].param2 = 0;
+    ring[xhci_cmd_idx].param1 = (uint32_t)((uint64_t)in_ctx & 0xFFFFFFFF);
+	ring[xhci_cmd_idx].param2 = (uint32_t)(((uint64_t)in_ctx >> 32) & 0xFFFFFFFF);
     ring[xhci_cmd_idx].status = 0;
     ring[xhci_cmd_idx].control = (11 << 10) | (slot_id << 24) | xhci_cmd_cycle;
     xhci_cmd_idx++;
@@ -623,7 +691,7 @@ _43 xhci_bot_get_capacity(_184 slot_id) {
 /// ==========================================
 /// 2. SEKTOREN LESEN (TOR 5)
 /// ==========================================
-_44 xhci_bot_read_sectors(_184 slot_id, _89 lba, _89 dest_ram) {
+_44 xhci_bot_read_sectors(_184 slot_id, uint32_t lba, uint64_t dest_ram) {
     _89* cbw_ram = (_89*)0x040B0000; _89* csw_ram = (_89*)0x040D0000;
     _39(_43 i=0; i<8; i++) { cbw_ram[i] = 0; csw_ram[i] = 0; }
     
@@ -636,7 +704,6 @@ _44 xhci_bot_read_sectors(_184 slot_id, _89 lba, _89 dest_ram) {
     volatile XHCI_TRB* in_ring  = (volatile XHCI_TRB*)xhci_ep_in_ring;
 
     /// COMMAND (OUT)
-    /// 64-Bit Fix
     out_ring[usb_out_idx].param1 = (_89)(uint64_t)cbw_ram; 
     out_ring[usb_out_idx].param2 = 0; 
     out_ring[usb_out_idx].status = 31; 
@@ -645,9 +712,9 @@ _44 xhci_bot_read_sectors(_184 slot_id, _89 lba, _89 dest_ram) {
     usb_out_idx++; _15(usb_out_idx > 60) usb_out_idx = 0;
     _39(volatile _43 wait = 0; wait < 1000000; wait++) { asm volatile("nop"); }
 
-    /// DATA (IN) - dest_ram ist schon ein 32-Bit Integer, hier kein Cast nötig!
-    in_ring[usb_in_idx].param1 = dest_ram; 
-    in_ring[usb_in_idx].param2 = 0; 
+    /// DATA (IN) - BARE METAL FIX: 64-Bit Pointer aufteilen!
+    in_ring[usb_in_idx].param1 = (uint32_t)(dest_ram & 0xFFFFFFFF); 
+    in_ring[usb_in_idx].param2 = (uint32_t)((dest_ram >> 32) & 0xFFFFFFFF); 
     in_ring[usb_in_idx].status = 512; 
     in_ring[usb_in_idx].control = (1 << 10) | (1 << 5) | 1;
     mmio_write32(xhci_db_base + (slot_id * 32), 3);
@@ -655,7 +722,6 @@ _44 xhci_bot_read_sectors(_184 slot_id, _89 lba, _89 dest_ram) {
     _39(volatile _43 wait = 0; wait < 1000000; wait++) { asm volatile("nop"); }
 
     /// STATUS (IN)
-    /// 64-Bit Fix
     in_ring[usb_in_idx].param1 = (_89)(uint64_t)csw_ram; 
     in_ring[usb_in_idx].param2 = 0; 
     in_ring[usb_in_idx].status = 13; 
@@ -671,7 +737,7 @@ _44 xhci_bot_read_sectors(_184 slot_id, _89 lba, _89 dest_ram) {
 /// ==========================================
 /// 3. SEKTOREN SCHREIBEN (TOR 6)
 /// ==========================================
-_44 xhci_bot_write_sectors(_184 slot_id, _89 lba, _89 src_ram) {
+_44 xhci_bot_write_sectors(_184 slot_id, uint32_t lba, uint64_t src_ram) {
     _89* cbw_ram = (_89*)0x040B0000; _89* csw_ram = (_89*)0x040D0000;
     _39(_43 i=0; i<8; i++) { cbw_ram[i] = 0; csw_ram[i] = 0; }
     
@@ -684,7 +750,6 @@ _44 xhci_bot_write_sectors(_184 slot_id, _89 lba, _89 src_ram) {
     volatile XHCI_TRB* in_ring  = (volatile XHCI_TRB*)xhci_ep_in_ring;
 
     /// COMMAND (OUT)
-    /// 64-Bit Fix
     out_ring[usb_out_idx].param1 = (_89)(uint64_t)cbw_ram; 
     out_ring[usb_out_idx].param2 = 0; 
     out_ring[usb_out_idx].status = 31; 
@@ -693,9 +758,9 @@ _44 xhci_bot_write_sectors(_184 slot_id, _89 lba, _89 src_ram) {
     usb_out_idx++; _15(usb_out_idx > 60) usb_out_idx = 0;
     _39(volatile _43 wait = 0; wait < 1000000; wait++) { asm volatile("nop"); }
 
-    /// DATA (OUT!) - src_ram ist schon 32-Bit, kein Cast!
-    out_ring[usb_out_idx].param1 = src_ram; 
-    out_ring[usb_out_idx].param2 = 0; 
+    /// DATA (OUT!) - BARE METAL FIX: 64-Bit Pointer aufteilen!
+    out_ring[usb_out_idx].param1 = (uint32_t)(src_ram & 0xFFFFFFFF); 
+    out_ring[usb_out_idx].param2 = (uint32_t)((src_ram >> 32) & 0xFFFFFFFF); 
     out_ring[usb_out_idx].status = 512; 
     out_ring[usb_out_idx].control = (1 << 10) | (1 << 5) | 1;
     mmio_write32(xhci_db_base + (slot_id * 32), 2);
@@ -703,7 +768,6 @@ _44 xhci_bot_write_sectors(_184 slot_id, _89 lba, _89 src_ram) {
     _39(volatile _43 wait = 0; wait < 1000000; wait++) { asm volatile("nop"); }
 
     /// STATUS (IN)
-    /// 64-Bit Fix
     in_ring[usb_in_idx].param1 = (_89)(uint64_t)csw_ram; 
     in_ring[usb_in_idx].param2 = 0; 
     in_ring[usb_in_idx].status = 13; 
@@ -739,8 +803,21 @@ void hex_to_str(uint32_t val, char* str) {
 /// Füge das oben in deine pci.cpp ein, falls Swap noch nicht bekannt ist:
 extern void Swap(); 
 
+/// BARE METAL DEBUG: Direkter Zugriff auf deinen Framebuffer!
+extern uint32_t* fb; 
+
+void xhci_debug_color(uint32_t hex_color) {
+    if (!fb) return;
+    /// Zeichnet ein fettes 50x50 Quadrat oben links in die Ecke (unaufhaltsam!)
+    for(int y=0; y<50; y++) {
+        for(int x=0; x<50; x++) {
+            fb[y*800 + x] = hex_color;
+        }
+    }
+}
+
 /// ==========================================
-/// BARE METAL: XHCI START MIT RÖNTGEN-DEBUGGER
+/// PASSIVER USB SCAN (BIOS BEHÄLT DIE KONTROLLE)
 /// ==========================================
 void system_init_usb() {
     uint32_t bus = 0; uint32_t dev = 0; uint32_t func = 0; 
@@ -758,62 +835,16 @@ void system_init_usb() {
         }
     }
 
-    if(!found) { str_cpy(hw_usb, "xHCI NOT FOUND"); return; }
-
-    uint32_t cmd = pci_read(bus, dev, func, 0x04);
-    pci_write(bus, dev, func, 0x04, cmd | 0x06);
-
-    uint32_t bar0 = pci_read(bus, dev, func, 0x10);
-    uint32_t bar1 = pci_read(bus, dev, func, 0x14);
-    
-    uint64_t op_base;
-    if ((bar0 & 0x06) == 0x04) { 
-        op_base = ((uint64_t)bar1 << 32) | (bar0 & 0xFFFFFFF0);
+    if(!found) { 
+        str_cpy(hw_usb, "xHCI NOT FOUND"); 
     } else {
-        op_base = bar0 & 0xFFFFFFF0;
+        str_cpy(hw_usb, "BIOS LEGACY USB ACTIVE"); 
     }
 
-    /// ----------------------------------------
-    /// AB HIER SCANNEN WIR JEDEN SCHRITT!
-    /// ----------------------------------------
-    
-    str_cpy(hw_usb, "1. PAGING..."); Swap();
-    map_mmio_64(op_base);
-
-    #ifdef __x86_64__
-        uint64_t ptr_base = op_base;
-    #else
-        uint32_t ptr_base = (uint32_t)(op_base & 0xFFFFFFFF);
-    #endif
-
-    str_cpy(hw_usb, "2. READ BASE..."); Swap();
-    uint8_t caplength = *((volatile uint8_t*)ptr_base);
-    uint64_t run_base = op_base + caplength;
-    uint32_t db_off = *((volatile uint32_t*)(ptr_base + 0x14));
-    xhci_db_base = op_base + (db_off & 0xFFFFFFFC);
-
-    #ifdef __x86_64__
-        uint64_t r_ptr = run_base;
-    #else
-        uint32_t r_ptr = (uint32_t)(run_base & 0xFFFFFFFF);
-    #endif
-
-    str_cpy(hw_usb, "3. HALTING..."); Swap();
-    uint32_t usbcmd = *((volatile uint32_t*)r_ptr);
-    *((volatile uint32_t*)r_ptr) = usbcmd & ~1;
-    for(volatile int w=0; w<100000; w++); 
-    
-    str_cpy(hw_usb, "4. RINGS..."); Swap();
-    for(int i=0; i<256; i++) xhci_dcbaa[i] = 0;
-    *((volatile uint32_t*)(r_ptr + 0x30)) = (uint32_t)((uint64_t)xhci_dcbaa & 0xFFFFFFFF);
-    *((volatile uint32_t*)(r_ptr + 0x34)) = (uint32_t)((uint64_t)xhci_dcbaa >> 32);
-    *((volatile uint32_t*)(r_ptr + 0x18)) = (uint32_t)((uint64_t)xhci_cmd_ring & 0xFFFFFFFF) | 1;
-    *((volatile uint32_t*)(r_ptr + 0x1C)) = (uint32_t)((uint64_t)xhci_cmd_ring >> 32);
-
-    str_cpy(hw_usb, "5. STARTING..."); Swap();
-    *((volatile uint32_t*)r_ptr) = usbcmd | 1;
-
-    str_cpy(hw_usb, "xHCI ONLINE (192GB)!");
+    /// WICHTIG: Wir fassen ab hier KEINE Register mehr an!
+    /// Kein BIOS-Handoff, kein Run/Stop, kein Strom-Reset.
+    /// Das BIOS denkt, wir haben keinen Treiber, und emuliert 
+    /// die USB-Geräte munter als PS/2-Geräte weiter.
 }
 _50 pci_scan_all() {
     /// 1. ALLE Zähler sauber resetten, damit Arrays niemals überlaufen!
@@ -866,7 +897,7 @@ _50 pci_scan_all() {
                         sys_hw.is_net_found = _128;
 
                         _89 cmd_reg = pci_read(bus, dev, func, 0x04);
-                        pci_write(bus, dev, func, 0x04, cmd_reg | 0x07);
+                        pci_write(bus, dev, func, 0x04, cmd_reg | 0x0407);
 
                         _15(nic_count < 5) { 
                             found_nics[nic_count].address = bar0;
@@ -916,9 +947,25 @@ _50 pci_scan_all() {
                                     cap_ptr = (cap_reg >> 8) & 0xFF;
                                 }
                                 
-                                /// 2. Rechte (Memory & Bus Master)
-                                _89 cmd_reg = pci_read(bus, dev, func, 0x04);
-                                pci_write(bus, dev, func, 0x04, cmd_reg | 0x06);
+                                /// 2. Rechte (Memory & Bus Master) UND alte Interrupts blockieren (0x0406 statt 0x06)
+								_89 cmd_reg = pci_read(bus, dev, func, 0x04);
+								pci_write(bus, dev, func, 0x04, cmd_reg | 0x0406);
+								
+								/// HIER ENTSCHÄRFEN WIR DIE MODERNE MSI-BOMBE VORHER!
+								_184 cap_ptr_msi = pci_read(bus, dev, func, 0x34) & 0xFF;
+								_39(_43 steps = 0; steps < 10 AND cap_ptr_msi NEQ 0; steps++) {
+									_89 cap_reg = pci_read(bus, dev, func, cap_ptr_msi);
+									_184 cap_id = cap_reg & 0xFF;
+									
+									_15(cap_id EQ 0x05) { /// MSI gefunden -> Abschalten!
+										_89 msi_ctrl = pci_read(bus, dev, func, cap_ptr_msi);
+										pci_write(bus, dev, func, cap_ptr_msi, msi_ctrl & ~0x00010000);
+									} _41 _15(cap_id EQ 0x11) { /// MSI-X gefunden -> Abschalten!
+										_89 msix_ctrl = pci_read(bus, dev, func, cap_ptr_msi);
+										pci_write(bus, dev, func, cap_ptr_msi, msix_ctrl & ~0x80000000);
+									}
+									cap_ptr_msi = (cap_reg >> 8) & 0xFF;
+								}
                                 
                                 /// 3. Adresse (BAR0 + BAR1) komplett lesen
                                 _89 bar0 = pci_read(bus, dev, func, 0x10);

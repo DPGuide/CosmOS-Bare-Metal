@@ -117,15 +117,7 @@ _202 Star { _43 x, y, z, type, speed; };
 /// BARE METAL PLUG & PLAY: Hardware Registry
 /// ==========================================
 _89 os2_ram_address = 0;
-_202 HardwareRegistry {
-    _44 is_ahci_found;
-    _89 ahci_bar5;      /// AHCI nutzt immer BAR5
-    _44 is_usb_found;
-    _89 usb_bar0;       /// USB (xHCI/EHCI) nutzt meist BAR0
-    _44 is_net_found;
-    _89 net_bar0;       /// Für Memory-Mapped Netzwerkkarten (Intel)
-    _89 net_io_port;    /// Für IO-Mapped Netzwerkkarten (RTL8139)
-};
+
 /// Wir erstellen eine globale Instanz, auf die alle Treiber zugreifen können
 HardwareRegistry sys_hw;
 /// ==========================================
@@ -2068,7 +2060,7 @@ _172 "C" _50 kernel_main(_89 magic, multiboot_info* mbi) {
                             } _41 _15(is_cfs) {
                                 /// BARE METAL FIX: CFS Dateinamen auslesen!
                                 _184 cfs_buf[512];
-                                ahci_read_sectors(drives[view_disk_idx].base_port, 1002, 1, (_89)cfs_buf);
+                                ahci_read_sectors(drives[view_disk_idx].base_port, 1002, 1, (uint64_t)cfs_buf);
                                 _39(_192 _43 wait=0; wait<500000; wait++) __asm__ _192("pause");
                                 CFS_DIR_ENTRY* entries = (CFS_DIR_ENTRY*)cfs_buf;
                                 _44 found = _86;
@@ -2552,33 +2544,33 @@ _172 "C" _50 kernel_main(_89 magic, multiboot_info* mbi) {
                                     _184* boot_sec = (_184*)0x04000000; 
                                     _39(_43 b=0; b<512; b++) boot_sec[b] = 0;
                                     /// Lese MBR (Sektor 0) - HIER IST DER FIX: (_89)
-                                    ahci_read_sectors(drives[active_drive_idx].base_port, 0, 1, (_89)boot_sec);
+                                    ahci_read_sectors(drives[active_drive_idx].base_port, 0, 1, (uint64_t)boot_sec);
                                     _39(_192 _43 wait = 0; wait < 1000000; wait++) __asm__ _192("pause");
                                     analyze_mbr(boot_sec);
                                     /// BARE METAL FIX: Wenn es eine GPT Platte ist, lesen wir den echten Header auf Sektor 1!
                                     _15(mbr_info_text[8] EQ 'G' AND mbr_info_text[9] EQ 'P' AND mbr_info_text[10] EQ 'T') {
                                         _39(_43 b=0; b<512; b++) boot_sec[b] = 0;
-                                        ahci_read_sectors(drives[active_drive_idx].base_port, 1, 1, (_89)boot_sec);
+                                        ahci_read_sectors(drives[active_drive_idx].base_port, 1, 1, (uint64_t)boot_sec);
                                         _39(_192 _43 wait = 0; wait < 1000000; wait++) __asm__ _192("pause");
                                         analyze_gpt(boot_sec);
                                         /// 2. Sektor 2 lesen (Die GPT Einträge!)
                                         _15(mbr_info_text[0] EQ 'G' AND mbr_info_text[1] EQ 'P' AND mbr_info_text[2] EQ 'T') {
                                             _39(_43 b=0; b<512; b++) boot_sec[b] = 0;
                                             gpt_partition_lba = 0;
-                                            ahci_read_sectors(drives[active_drive_idx].base_port, 2, 1, (_89)boot_sec);
+                                            ahci_read_sectors(drives[active_drive_idx].base_port, 2, 1, (uint64_t)boot_sec);
                                             _39(_192 _43 wait = 0; wait < 1000000; wait++) __asm__ _192("pause");
                                             analyze_gpt_entries(boot_sec);
                                             /// 3. Den VBR der gefundenen Partition lesen!
                                             _15(gpt_partition_lba > 0) {
                                                 _39(_43 b=0; b<512; b++) boot_sec[b] = 0;
-                                                ahci_read_sectors(drives[active_drive_idx].base_port, gpt_partition_lba, 1, (_89)boot_sec);
+                                                ahci_read_sectors(drives[active_drive_idx].base_port, gpt_partition_lba, 1, (uint64_t)boot_sec);
                                                 _39(_192 _43 wait = 0; wait < 1000000; wait++) __asm__ _192("pause");
                                                 analyze_vbr(boot_sec);
                                                 /// 4. MFT Record 5 lesen (Das Root-Verzeichnis!)
                                                 _15(mft_start_lba > 0) {
                                                     _39(_43 b=0; b<1024; b++) boot_sec[b] = 0;
                                                     _89 record_5_lba = mft_start_lba + 10;
-                                                    ahci_read_sectors(drives[active_drive_idx].base_port, record_5_lba, 2, (_89)boot_sec);
+                                                    ahci_read_sectors(drives[active_drive_idx].base_port, record_5_lba, 2, (uint64_t)boot_sec);
                                                     _39(_192 _43 wait = 0; wait < 1000000; wait++) __asm__ _192("pause");
                                                     analyze_mft_root(boot_sec);
                                                     is_ntfs = 1;
@@ -2619,7 +2611,7 @@ _172 "C" _50 kernel_main(_89 magic, multiboot_info* mbi) {
                                             is_cfs = _128;
                                             _184 cfs_buf[512];
                                             /// Lese das Inhaltsverzeichnis (Sektor 1002) in den RAM
-                                            ahci_read_sectors(drives[active_drive_idx].base_port, 1002, 1, (_89)cfs_buf);
+                                            ahci_read_sectors(drives[active_drive_idx].base_port, 1002, 1, (uint64_t)cfs_buf);
                                             _39(_192 _43 wait = 0; wait < 1000000; wait++) __asm__ _192("pause");
                                             CFS_DIR_ENTRY* entries = (CFS_DIR_ENTRY*)cfs_buf;
                                             _39(_43 i=0; i<8; i++) {
@@ -4086,7 +4078,7 @@ _172 "C" _50 kernel_main(_89 magic, multiboot_info* mbi) {
                             _184* dump_buf = (_184*)0x05000000;
                             _39(_43 i=0; i<512; i++) dump_buf[i] = 0;
                             /// Wir feuern den direkten DMA-Lese-Befehl ab!
-                            _15(ahci_read_sectors(port_no, 0, 1, (_89)dump_buf)) {
+                            _15(ahci_read_sectors(port_no, 0, 1, (uint64_t)dump_buf)) {
                                 _30 h1[5], h2[5], h3[5], h4[5];
                                 byte_to_hex(dump_buf[0], h1); 
                                 byte_to_hex(dump_buf[1], h2); 

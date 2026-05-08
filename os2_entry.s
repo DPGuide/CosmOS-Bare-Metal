@@ -97,3 +97,23 @@ gdt64:
 gdt64_ptr:
     .word gdt64_ptr - gdt64 - 1
     .quad gdt64
+	
+.global isr_trap
+isr_trap:
+    # 0-31: Echte CPU-Exceptions (RAM-Crash, etc.)
+    # Hier halten wir die CPU sicher an, damit sie nicht neu startet.
+    cli
+    hlt
+    jmp isr_trap
+
+.global isr_hw
+isr_hw:
+    # 32-255: Hardware-Interrupts (USB, Maus, Tastatur)
+    # Wir retten kurz das A-Register, bestätigen den Empfang beim PIC
+    # und springen butterweich in dein OS2 zurück!
+    pushq %rax
+    movb $0x20, %al
+    outb %al, $0x20   # EOI an Master PIC
+    outb %al, $0xA0   # EOI an Slave PIC
+    popq %rax
+    iretq

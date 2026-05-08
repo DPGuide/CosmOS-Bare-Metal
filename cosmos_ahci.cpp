@@ -786,30 +786,52 @@ _50 ahci_read_mbr() {
         /// ==========================================
         _15(timeout > 0 AND !(port_regs[13] & 0x40000000)) {
             _192 _184* byte_buf = (_192 _184*)data_buffer_addr;
+            
             /// Ist es überhaupt ein gültiger Bootsektor? (Byte 510 und 511 müssen 55 AA sein)
             _15(byte_buf[510] EQ 0x55 AND byte_buf[511] EQ 0xAA) {
-                /// Wir hängen das Dateisystem an den Modellnamen an
-                _30 fs_string[10];
+                /// BARE METAL FIX: Puffer auf 15 vergrößert für längere Labels!
+                _30 fs_string[15];
                 str_cpy(fs_string, "[RAW]");
-                /// Bei FAT32 steht der Name oft bei Offset 82
+                
+                /// ----------------------------------------------------
+                /// CHECK 1: SUPER-FLOPPY (Dateisystem direkt auf LBA 0)
+                /// ----------------------------------------------------
                 _15(byte_buf[82] EQ 'F' AND byte_buf[83] EQ 'A' AND byte_buf[84] EQ 'T' AND byte_buf[85] EQ '3' AND byte_buf[86] EQ '2') {
                     str_cpy(fs_string, "[FAT32]");
                 }
-                /// Bei exFAT steht der OEM Name oft direkt am Anfang ab Byte 3
                 _41 _15(byte_buf[3] EQ 'E' AND byte_buf[4] EQ 'X' AND byte_buf[5] EQ 'F' AND byte_buf[6] EQ 'A' AND byte_buf[7] EQ 'T') {
                     str_cpy(fs_string, "[exFAT]");
                 }
-                /// Bei NTFS steht "NTFS    " ab Byte 3
                 _41 _15(byte_buf[3] EQ 'N' AND byte_buf[4] EQ 'T' AND byte_buf[5] EQ 'F' AND byte_buf[6] EQ 'S') {
                     str_cpy(fs_string, "[NTFS]");
                 }
-				/// --- BARE METAL FIX: CFS ERKENNUNG ---
                 _41 _15(byte_buf[3] EQ 'C' AND byte_buf[4] EQ 'F' AND byte_buf[5] EQ 'S') {
                     str_cpy(fs_string, "[CFS]");
                 }
-                /// Den FS-String an das Modell anhängen (Ein bisschen dreckig, aber funktioniert fürs UI)
+                /// ----------------------------------------------------
+                /// CHECK 2: PARTITIONIERT (MBR oder GPT auf LBA 0)
+                /// ----------------------------------------------------
+                _41 {
+                    /// Wir lesen den Typ der ersten Partition aus der MBR-Tabelle!
+                    _184 part_type = byte_buf[446 + 4];
+                    
+                    _15(part_type EQ 0xEE) {
+                        str_cpy(fs_string, "[GPT]");
+                    } _41 _15(part_type EQ 0x07) {
+                        str_cpy(fs_string, "[NTFS]");
+                    } _41 _15(part_type EQ 0x0B OR part_type EQ 0x0C) {
+                        str_cpy(fs_string, "[FAT32]");
+                    } _41 _15(part_type EQ 0x83) {
+                        str_cpy(fs_string, "[EXT]");
+                    } _41 _15(part_type NEQ 0x00) {
+                        str_cpy(fs_string, "[MBR]");
+                    }
+                }
+
+                /// Den FS-String an das Modell anhängen
                 _43 m_len = 0;
                 _114(drives[d].model[m_len] NEQ 0 AND m_len < 30) m_len++;
+                
                 _43 fs_len = 0;
                 _114(fs_string[fs_len] NEQ 0) {
                     drives[d].model[m_len++] = fs_string[fs_len++];
@@ -818,7 +840,7 @@ _50 ahci_read_mbr() {
                 str_cpy(cmd_status, "FS SCANNED!");
             }
         }
-    }
+	}
 }
 _50 ahci_panzer_scan_tick() {
     _15(ahci_scan_state EQ 0 OR global_ahci_abar EQ 0) _96;
