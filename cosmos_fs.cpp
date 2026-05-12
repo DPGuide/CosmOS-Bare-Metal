@@ -9,11 +9,11 @@ _172 _50 ahci_read_sectors(_43 port_no, _43 startlba, _43 count, _89 dma_addr);
 _172 _44 usb_bot_read_sectors(_43 dev_addr, _43 ep_out, _43 ep_in, _89 lba, _43 num_sectors, _184* buffer);
 _172 _44 ahci_write_sectors(_43 port_no, _43 lba, _43 count, _89 buffer_addr);
 /// Globale Variablen des Dateisystems
-PhysicalDrive drives[8]; 
+PhysicalDrive drives[20]; 
 _43 drive_count = 0; 
 Partition partitions[4]; 
 _184 sector0[512]; 
-FileEntry file_table[8]; 
+FileEntry file_table[28]; 
 _43 drive_status = 0; 
 _184 hdd_buf[512];
 _43 active_drive_idx = -1;
@@ -336,7 +336,7 @@ _50 ata_identify(_182 base, _44 slave, _43 slot) {
 }
 _50 ata_scan_drives() { 
     drive_count = 0; 
-    _39(_43 i=0; i<8; i++) drives[i].present = _86;
+    _39(_43 i=0; i<20; i++) drives[i].present = _86;
     ata_identify(0x1F0, _86, 0); 
     ata_identify(0x1F0, _128, 1); 
     ata_identify(0x170, _86, 2); 
@@ -345,7 +345,7 @@ _50 ata_scan_drives() {
         ata_identify(ata_base, _86, 4);
         ata_identify(ata_base, _128, 5);
     }
-    _15(usb_detected AND drive_count < 8) { 
+    _15(usb_detected AND drive_count < 20) { 
         _43 d = drive_count; drives[d].present = _128; drives[d].type = 3; 
         str_cpy(drives[d].model, "USB MASS STORAGE"); drives[d].size_mb = 16000; 
         drive_count++; 
@@ -426,7 +426,7 @@ _50 fs_flush_table() {
 }
 _50 fs_create_folder(_71 _30* foldername) {
     _43 free_slot = -1;
-    _39(_43 i=0; i<8; i++) {
+    _39(_43 i=0; i<28; i++) {
         _15(file_table[i].exists EQ 0) { free_slot = i; _37; }
     }
     _15(free_slot EQ -1) _96;
@@ -443,7 +443,7 @@ _50 fs_create_folder(_71 _30* foldername) {
 _50 fs_save_file(_71 _30* filename, _89 size) {
     /// 1. Freien Platz in der Tabelle suchen
     _43 free_slot = -1;
-    _39(_43 i=0; i<8; i++) {
+    _39(_43 i=0; i<28; i++) {
         _15(file_table[i].exists EQ 0) { free_slot = i; _37; }
     }
     _15(free_slot EQ -1) _96; /// Abbruch, wenn Tabelle voll
@@ -493,19 +493,19 @@ _50 fs_init() {
         _30* src = (_30*)safe_buf;
         _30* dst = (_30*)file_table;
         _39(_43 i=0; i<sizeof(file_table); i++) dst[i] = src[i];
-        _39(_43 i=0; i<8; i++) _15(file_table[i].exists) found_table = _128;
+        _39(_43 i=0; i<28; i++) _15(file_table[i].exists) found_table = _128;
     } _41 {
         _15(active_drive_idx NEQ -1) {
             ata_read_sector(drives[active_drive_idx].base_port, drives[active_drive_idx].is_slave, 1002, hdd_buf);
             _30* src = (_30*)hdd_buf;
             _30* dst = (_30*)file_table;
             _39(_43 i=0; i<sizeof(file_table); i++) dst[i] = src[i];
-            _39(_43 i=0; i<8; i++) _15(file_table[i].exists) found_table = _128;
+            _39(_43 i=0; i<28; i++) _15(file_table[i].exists) found_table = _128;
         }
     }
     /// 3. DEIN ORIGINALER FALLBACK (Wenn die Platte leer ist)
     _15(!found_table) { 
-        _39(_43 i=0; i<8; i++) file_table[i].exists = _86;
+        _39(_43 i=0; i<28; i++) file_table[i].exists = _86;
         file_table[0].exists=_128; 
         str_cpy(file_table[0].name, "boot.sys"); 
         file_table[0].is_folder=_86; 

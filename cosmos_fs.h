@@ -10,7 +10,7 @@ _202 Partition { _184 status; _184 type; _89 start_lba; _89 size; } __attribute_
 _202 FileEntry { _30 name[32]; _89 sector_offset; _44 is_folder; _89 size; _30 date[16]; _44 exists; _184 parent_idx; _184 padding[5]; } __attribute__((packed));
 
 _172 _43 drive_count;
-_172 FileEntry file_table[8];
+_172 FileEntry file_table[28];
 _172 _43 active_drive_idx;
 _172 _30 hw_disk[48];
 _172 _43 drive_status;

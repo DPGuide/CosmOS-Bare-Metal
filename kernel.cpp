@@ -247,7 +247,7 @@ _50 ahci_save_file_complete(HBA_PORT* hdd, _71 _30* filename, _184* data_buf) {
     CFS_DIR_ENTRY* entries = (CFS_DIR_ENTRY*)dir_buf;
     /// 2. Schauen, ob die Datei schon existiert (überschreiben) oder leeren Slot suchen
     _43 slot = 255;
-    _39(_43 i=0; i<8; i++) {
+    _39(_43 i=0; i<28; i++) {
         _15(entries[i].type EQ 1) {
             _44 match = _128;
             _39(_43 c=0; c<12; c++) { _15(entries[i].filename[c] NEQ filename[c] AND filename[c] NEQ 0) match = _86; }
@@ -256,7 +256,7 @@ _50 ahci_save_file_complete(HBA_PORT* hdd, _71 _30* filename, _184* data_buf) {
     }
     _15(slot EQ 255) {
         /// Neue Datei: Finde den ersten leeren Slot
-        _39(_43 i=0; i<8; i++) { _15(entries[i].type EQ 0) { slot = i; _37; } }
+        _39(_43 i=0; i<28; i++) { _15(entries[i].type EQ 0) { slot = i; _37; } }
     }
     _15(slot EQ 255) _96;
     /// 3. Daten auf die Festplatte brennen (Wir nutzen Sektor 4000 + den Slot-Index)
@@ -1495,7 +1495,7 @@ _50 init_builtin_device_tree() {
 _89 find_dynamic_ahci_bar() {
     _39(_43 b=0; b<256; b++) {
         _39(_184 d=0; d<32; d++) {
-            _39(_184 f=0; f<8; f++) {
+            _39(_184 f=0; f<28; f++) {
                 _89 id = pci_read(b, d, f, 0);
                 _15((id & 0xFFFF) NEQ 0xFFFF) {
                     _89 class_rev = pci_read(b, d, f, 0x08);
@@ -2065,7 +2065,7 @@ _172 "C" _50 kernel_main(_89 magic, multiboot_info* mbi) {
                                 CFS_DIR_ENTRY* entries = (CFS_DIR_ENTRY*)cfs_buf;
                                 _44 found = _86;
                                 /// Inhaltsverzeichnis nach der ersten echten Datei durchsuchen
-                                _39(_43 i=0; i<8; i++) {
+                                _39(_43 i=0; i<28; i++) {
                                     _15(entries[i].type EQ 1) {
                                         str_cpy(cmd_status, entries[i].filename);
                                         found = _128;
@@ -2293,7 +2293,7 @@ _172 "C" _50 kernel_main(_89 magic, multiboot_info* mbi) {
                     _15(is_cfs) {
                         _43 used_bytes = 4096;
                         /// Globale Tabelle scannen
-                        _39(_43 i=0; i<8; i++) {
+                        _39(_43 i=0; i<28; i++) {
                             _15(file_table[i].exists AND !file_table[i].is_folder) {
                                 _43 sectors = (file_table[i].size + 511) / 512;
                                 used_bytes += (sectors * 512);
@@ -2354,7 +2354,7 @@ _172 "C" _50 kernel_main(_89 magic, multiboot_info* mbi) {
                             mirror_count = 0;
                             _39(_43 b=0; b<10; b++) {
                                 _39(_184 d=0; d<32; d++) {
-                                    _39(_184 f=0; f<8; f++) {
+                                    _39(_184 f=0; f<28; f++) {
                                         _89 id = sys_pci_read(b, d, f, 0);
                                         _182 ven = id & 0xFFFF;
                                         _15(ven NEQ 0xFFFF AND ven NEQ 0x0000 AND mirror_count < 20) {
@@ -2455,7 +2455,7 @@ _172 "C" _50 kernel_main(_89 magic, multiboot_info* mbi) {
                             _43 y_off = wy + 100;
                             _44 found_ghost = _86;
                             /// 2. Geisterdaten suchen
-                            _39(_43 i=0; i<8; i++) {
+                            _39(_43 i=0; i<28; i++) {
                                 _15(entries[i].type EQ 0 AND entries[i].filename[0] NEQ 0) {
                                     found_ghost = _128;
                                     DrawRoundedRect(hx+20, y_off, hw-40, 25, 3, 0x222222);
@@ -2614,7 +2614,7 @@ _172 "C" _50 kernel_main(_89 magic, multiboot_info* mbi) {
                                             ahci_read_sectors(drives[active_drive_idx].base_port, 1002, 1, (uint64_t)cfs_buf);
                                             _39(_192 _43 wait = 0; wait < 1000000; wait++) __asm__ _192("pause");
                                             CFS_DIR_ENTRY* entries = (CFS_DIR_ENTRY*)cfs_buf;
-                                            _39(_43 i=0; i<8; i++) {
+                                            _39(_43 i=0; i<28; i++) {
                                                 _15(entries[i].type NEQ 0) {
                                                     file_table[i].exists = _128;
                                                     file_table[i].parent_idx = 255;
@@ -2642,7 +2642,7 @@ _172 "C" _50 kernel_main(_89 magic, multiboot_info* mbi) {
                                             _184 part_type = boot_sec[446 + 4];
                                             _15(part_type EQ 0xEE) {
                                                 /// --- BARE METAL FIX: GPT PROTECTIVE MBR GEFUNDEN!
-                                                _39(_43 f=0; f<8; f++) file_table[f].exists = _86;
+                                                _39(_43 f=0; f<28; f++) file_table[f].exists = _86;
                                                 file_table[0].exists = _128; file_table[0].parent_idx = 255; file_table[0].is_folder = _86;
                                                 str_cpy(file_table[0].name, "[GPT DRIVE]"); file_table[0].size = 0; str_cpy(file_table[0].date, "SYSTEM");
                                                 file_table[1].exists = _128; file_table[1].parent_idx = 255; file_table[1].is_folder = _86;
@@ -2795,14 +2795,14 @@ _172 "C" _50 kernel_main(_89 magic, multiboot_info* mbi) {
                                             }
                                         }
                                     } _41 _15(is_ext) {
-                                        _39(_43 f=0; f<8; f++) file_table[f].exists = _86;
+                                        _39(_43 f=0; f<28; f++) file_table[f].exists = _86;
                                         file_table[0].exists = _128; file_table[0].parent_idx = 255; file_table[0].is_folder = _86;
                                         str_cpy(file_table[0].name, "[LINUX EXT]"); file_table[0].size = 0; str_cpy(file_table[0].date, "SYSTEM");
                                         file_table[1].exists = _128; file_table[1].parent_idx = 255; file_table[1].is_folder = _86;
                                         str_cpy(file_table[1].name, "ROOT FS"); file_table[1].size = 0; str_cpy(file_table[1].date, "LOCKED");
                                     /// --- BARE METAL FIX: APK EASTER EGG ---
                                     } _41 _15(is_apk) {
-                                        _39(_43 f=0; f<8; f++) file_table[f].exists = _86;
+                                        _39(_43 f=0; f<28; f++) file_table[f].exists = _86;
                                         file_table[0].exists = _128; file_table[0].parent_idx = 255; file_table[0].is_folder = _86;
                                         str_cpy(file_table[0].name, "[ANDROID]"); file_table[0].size = 0; str_cpy(file_table[0].date, "PACKAGE");
                                         file_table[1].exists = _128; file_table[1].parent_idx = 255; file_table[1].is_folder = _86;
@@ -2814,9 +2814,9 @@ _172 "C" _50 kernel_main(_89 magic, multiboot_info* mbi) {
                                         _30* dst = (_30*)file_table;
                                         _39(_43 i=0; i<sizeof(file_table); i++) dst[i] = src[i];
                                         _44 has_cfs = _86;
-                                        _39(_43 i=0; i<8; i++) { _15(file_table[i].exists EQ _128) has_cfs = _128; }
+                                        _39(_43 i=0; i<28; i++) { _15(file_table[i].exists EQ _128) has_cfs = _128; }
                                         _15(!has_cfs) {
-                                            _39(_43 i=0; i<8; i++) file_table[i].exists = _86; 
+                                            _39(_43 i=0; i<28; i++) file_table[i].exists = _86; 
                                             file_table[0].exists = _128; file_table[0].parent_idx = 255; file_table[0].is_folder = _86;
                                             str_cpy(file_table[0].name, drives[active_drive_idx].model);
                                             file_table[0].size = 0;
@@ -2908,7 +2908,7 @@ _172 "C" _50 kernel_main(_89 magic, multiboot_info* mbi) {
                                 _39(_192 _43 wait=0; wait<500000; wait++) __asm__ _192("pause");
                                 CFS_DIR_ENTRY* entries = (CFS_DIR_ENTRY*)dir_buffer;
                                 _43 free_slot = 255;
-                                _39(_43 i=0; i<8; i++) { _15(entries[i].type EQ 0) { free_slot = i; _37; } }
+                                _39(_43 i=0; i<28; i++) { _15(entries[i].type EQ 0) { free_slot = i; _37; } }
                                 _15(free_slot NEQ 255) {
                                     entries[free_slot].type = 1;
                                     str_cpy(entries[free_slot].filename, "new_file.txt");
@@ -2935,7 +2935,7 @@ _172 "C" _50 kernel_main(_89 magic, multiboot_info* mbi) {
                                 _39(_192 _43 wait=0; wait<500000; wait++) __asm__ _192("pause");
                                 CFS_DIR_ENTRY* entries = (CFS_DIR_ENTRY*)dir_buffer;
                                 _43 free_slot = 255;
-                                _39(_43 i=0; i<8; i++) { _15(entries[i].type EQ 0) { free_slot = i; _37; } }
+                                _39(_43 i=0; i<28; i++) { _15(entries[i].type EQ 0) { free_slot = i; _37; } }
                                 _15(free_slot NEQ 255) {
                                     entries[free_slot].type = 2;
                                     str_cpy(entries[free_slot].filename, "new_folder");
@@ -2959,7 +2959,7 @@ _172 "C" _50 kernel_main(_89 magic, multiboot_info* mbi) {
                         Text(wx+280, wy+90, "DATE", 0x555555, _128);
                         _43 y_off = wy+110;
                         /// HIER MUSS DIE SCHLEIFE STARTEN!
-                        _39(_43 f=0; f<8; f++) {
+                        _39(_43 f=0; f<28; f++) {
                             /// 1. Prüfen, ob die Datei angezeigt werden soll
                             _44 show_file = _86;
                             /// BARE METAL FIX: Scope-Error gelöscht!
@@ -3081,7 +3081,7 @@ _172 "C" _50 kernel_main(_89 magic, multiboot_info* mbi) {
                                             
                                             CFS_DIR_ENTRY* entries = (CFS_DIR_ENTRY*)dir_buffer;
                                             _43 free_slot = 255;
-                                            _39(_43 i=0; i<8; i++) { _15(entries[i].type EQ 0) { free_slot = i; _37; } }
+                                            _39(_43 i=0; i<28; i++) { _15(entries[i].type EQ 0) { free_slot = i; _37; } }
                                             _15(free_slot NEQ 255) {
                                                 /// 4. Daten auf CFS brennen
                                                 _43 dest_lba = 4000 + free_slot;
@@ -3148,7 +3148,7 @@ _172 "C" _50 kernel_main(_89 magic, multiboot_info* mbi) {
                         _15(drives[active_drive_idx].model[1] EQ 'C' AND drives[active_drive_idx].model[2] EQ 'F' AND drives[active_drive_idx].model[3] EQ 'S') {
                             _43 used_bytes = 4096; /// 4KB CFS System Overhead (MBR + Directory Sektoren)
                             /// Wir iterieren durch die RAM-Tabelle und zählen die belegten Sektoren
-                            _39(_43 i=0; i<8; i++) {
+                            _39(_43 i=0; i<28; i++) {
                                 _15(file_table[i].exists AND !file_table[i].is_folder) {
                                     /// Physische Aufrundung: Jede angefangene Datei belegt volle 512-Byte Blöcke!
                                     _43 sectors = (file_table[i].size + 511) / 512;
@@ -3188,7 +3188,7 @@ _172 "C" _50 kernel_main(_89 magic, multiboot_info* mbi) {
                                 TextC(wx+330, wy+56, "+ FILE", 0x00FF00, _86);
                                 _15(input_cooldown EQ 0 AND mouse_just_pressed AND !blocked AND !(windows[10].open AND !windows[10].minimized) AND is_over_rect(mouse_x, mouse_y, wx+300, wy+50, 60, 20)) {
                                     _43 free_slot = 255;
-                                    _39(_43 i=0; i<8; i++) { _15(file_table[i].exists EQ _86) { free_slot = i; _37; } }
+                                    _39(_43 i=0; i<28; i++) { _15(file_table[i].exists EQ _86) { free_slot = i; _37; } }
                                     _15(free_slot NEQ 255) {
                                         file_table[free_slot].exists = _128;
                                         file_table[free_slot].is_folder = _86;
@@ -3206,7 +3206,7 @@ _172 "C" _50 kernel_main(_89 magic, multiboot_info* mbi) {
                                 TextC(wx+400, wy+56, "+ DIR", 0xFFAA00, _86);
                                 _15(input_cooldown EQ 0 AND mouse_just_pressed AND !blocked AND !(windows[10].open AND !windows[10].minimized) AND is_over_rect(mouse_x, mouse_y, wx+370, wy+50, 60, 20)) {
                                     _43 free_slot = 255;
-                                    _39(_43 i=0; i<8; i++) { _15(file_table[i].exists EQ _86) { free_slot = i; _37; } }
+                                    _39(_43 i=0; i<28; i++) { _15(file_table[i].exists EQ _86) { free_slot = i; _37; } }
                                     _15(free_slot NEQ 255) {
                                         file_table[free_slot].exists = _128;
                                         file_table[free_slot].is_folder = _128;
@@ -3227,7 +3227,7 @@ _172 "C" _50 kernel_main(_89 magic, multiboot_info* mbi) {
                             Text(wx+200, wy+100, "SIZE", 0x555555, _128); 
                             Text(wx+280, wy+100, "DATE", 0x555555, _128);
                             _43 y_off = wy+120;
-                            _39(_43 f=0; f<8; f++) {
+                            _39(_43 f=0; f<28; f++) {
                                 _15(file_table[f].exists AND file_table[f].parent_idx EQ current_folder_view_idx) {
                                     /// --- ZEILE FÜR ZEILE ZEICHNEN (Inklusive Größe und Datum) ---
                                     DrawIcon(wx+25, y_off, file_table[f].is_folder ? 0x888888 : 0xCCCCCC); 
@@ -3360,7 +3360,7 @@ _172 "C" _50 kernel_main(_89 magic, multiboot_info* mbi) {
                 _15(drives[active_drive_idx].model[1] EQ 'C' AND drives[active_drive_idx].model[2] EQ 'F' AND drives[active_drive_idx].model[3] EQ 'S') {
                     _43 used_bytes = 4096; /// 4KB CFS System Overhead (MBR + Directory Sektoren)
                     /// Wir iterieren durch die RAM-Tabelle und zählen die belegten Sektoren
-                    _39(_43 i=0; i<8; i++) {
+                    _39(_43 i=0; i<28; i++) {
                         _15(file_table[i].exists AND !file_table[i].is_folder) {
                             /// Physische Aufrundung: Jede angefangene Datei belegt volle 512-Byte Blöcke!
                             _43 sectors = (file_table[i].size + 511) / 512;
@@ -3847,7 +3847,7 @@ _172 "C" _50 kernel_main(_89 magic, multiboot_info* mbi) {
                             ahci_read_sectors(drives[active_drive_idx].base_port, 1002, 1, dir_ram_addr);
                             _39(_192 _43 wait=0; wait<500000; wait++) __asm__ _192("pause");
                             CFS_DIR_ENTRY* entries = (CFS_DIR_ENTRY*)dir_ram_addr;
-                            _39(_43 i=0; i<8; i++) {
+                            _39(_43 i=0; i<28; i++) {
                                 _15(entries[i].type NEQ 0) {
                                     file_table[i].exists = _128;
                                     file_table[i].parent_idx = 255; /// 255 = Root Directory
@@ -3873,7 +3873,7 @@ _172 "C" _50 kernel_main(_89 magic, multiboot_info* mbi) {
                             }
                             Text(wx+30, y_ptr, "[ .. BACK TO ROOT ]", 0x0000FF, _86); y_ptr += 20;
                         }
-                        _39(_43 f=0; f<8; f++) {
+                        _39(_43 f=0; f<28; f++) {
                             _15(file_table[f].exists AND file_table[f].is_folder AND file_table[f].parent_idx EQ current_path_id) {
                                 _15(mouse_just_pressed AND !blocked AND is_over_rect(mouse_x, mouse_y, wx+25, y_ptr, 200, 15)) {
                                     current_path_id = f; input_cooldown = 10;
@@ -3915,7 +3915,7 @@ _172 "C" _50 kernel_main(_89 magic, multiboot_info* mbi) {
                             /// 3. Freien Datei-Slot suchen
                             CFS_DIR_ENTRY* entries = (CFS_DIR_ENTRY*)dir_ram_addr;
                             _43 slot = 255;
-                            _39(_43 i=0; i<8; i++) {
+                            _39(_43 i=0; i<28; i++) {
                                 _15(entries[i].type EQ 0) { slot = i; _37; }
                             }
                             _15(slot NEQ 255) {
@@ -3962,7 +3962,7 @@ _172 "C" _50 kernel_main(_89 magic, multiboot_info* mbi) {
                             CFS_DIR_ENTRY* entries = (CFS_DIR_ENTRY*)dir_ram_addr;
                             _43 slot = 255;
                             /// 2. Freien Slot finden
-                            _39(_43 i=0; i<8; i++) {
+                            _39(_43 i=0; i<28; i++) {
                                 _15(entries[i].type EQ 0) { slot = i; _37; }
                             }
                             _15(slot NEQ 255) {
@@ -3986,7 +3986,7 @@ _172 "C" _50 kernel_main(_89 magic, multiboot_info* mbi) {
                         _15(last_key EQ 0x1C) { 
                             cmd_input[cmd_idx] = 0; _39(_43 l=4; l>0; l--) str_cpy(cmd_lines[l], cmd_lines[l-1]); str_cpy(cmd_lines[0], cmd_input);
                             _89 cid = get_id(cmd_input);
-                            _15(str_equal(cmd_input, "DIR")) { str_cpy(cmd_last_out, ""); _43 p=0; _39(_43 i=0;i<8;i++) { _15(file_table[i].exists AND file_table[i].parent_idx EQ 255) { _71 _30* n=file_table[i].name; _114(*n AND p<38) cmd_last_out[p++]=*n++; _15(p<38) cmd_last_out[p++]=' '; } } cmd_last_out[p]=0; } 
+                            _15(str_equal(cmd_input, "DIR")) { str_cpy(cmd_last_out, ""); _43 p=0; _39(_43 i=0;i<28;i++) { _15(file_table[i].exists AND file_table[i].parent_idx EQ 255) { _71 _30* n=file_table[i].name; _114(*n AND p<38) cmd_last_out[p++]=*n++; _15(p<38) cmd_last_out[p++]=' '; } } cmd_last_out[p]=0; } 
                             _41 _15(str_equal(cmd_input, "HELP")) str_cpy(cmd_last_out, "CMD: DIR, NET, PING, IPCONFIG, AHCIDEBUG, DUMP 0, LINK, SCAN, STATS, CLS");
 							_41 _15(str_equal(cmd_input, "CRASH")) { kernel_panic("MANUAL SYSTEM STRESS TEST");}
                             _41 _15(str_equal(cmd_input, "CLS")) { _39(_43 l=0;l<5;l++) cmd_lines[l][0]=0; str_cpy(cmd_last_out, "READY."); }

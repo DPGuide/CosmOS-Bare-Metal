@@ -85,19 +85,22 @@ int num_tasks = 1;
 void create_task(void (*entry_point)()) {
     if (num_tasks >= 4) return;
     int id = num_tasks++;
-    tasks[id].active = _128;
+    tasks[id].active = true;
     
-    /// 64-Bit Pointer an das Ende des 8KB RAM-Blocks setzen
-    uint64_t* stack_top = (uint64_t*)(tasks[id].stack + 8192);
+    /// BARE METAL FIX: Wir erzwingen eine saubere 16-Byte Ausrichtung für den neuen Stack!
+    uint64_t stack_base = (uint64_t)&tasks[id].stack[8192];
+    stack_base &= ~0xF; /// Die letzten 4 Bits auf 0 setzen (16-Byte Align)
+    
+    uint64_t* stack_top = (uint64_t*)stack_base;
     
     /// 64-Bit Hardware Interrupt-Frame für den 'iretq' Befehl
     *(--stack_top) = 0x10;                  /// SS (Data Segment)
-    *(--stack_top) = (uint64_t)(tasks[id].stack + 8192); /// RSP (Start-Stack)
+    *(--stack_top) = stack_base;            /// RSP (Start-Stack des Tasks)
     *(--stack_top) = 0x0202;                /// RFLAGS (Interrupts an)
     *(--stack_top) = 0x08;                  /// CS (Kernel Code Segment)
     *(--stack_top) = (uint64_t)entry_point; /// RIP (Wo soll das Programm starten?)
     
-    /// Alle 15 großen 64-Bit Register (rax bis r15) für den Start nullen
+    /// Alle 15 großen 64-Bit Register für den Start nullen
     for(int i = 0; i < 15; i++) {
         *(--stack_top) = 0;
     }
@@ -123,46 +126,28 @@ extern "C" uint64_t schedule(uint64_t old_rsp) {
 /// ==========================================
 __attribute__((naked)) void pit_isr() {
     __asm__ volatile(
-        "pushq %rax \n"
-        "pushq %rcx \n"
-        "pushq %rdx \n"
-        "pushq %rbx \n"
-        "pushq %rbp \n"
-        "pushq %rsi \n"
-        "pushq %rdi \n"
-        "pushq %r8 \n"
-        "pushq %r9 \n"
-        "pushq %r10 \n"
-        "pushq %r11 \n"
-        "pushq %r12 \n"
-        "pushq %r13 \n"
-        "pushq %r14 \n"
-        "pushq %r15 \n"
-        
-        "movq %rsp, %rdi \n" /// 1. Argument (Alter RSP) an schedule() übergeben
-        "call schedule \n"   /// C++ aufrufen (Neuer RSP kommt in RAX zurück)
-        "movq %rax, %rsp \n" /// Den Stack der CPU AUSTAUSCHEN!
-        
+        "pushq %rax \n" "pushq %rcx \n" "pushq %rdx \n" "pushq %rbx \n"
+        "pushq %rbp \n" "pushq %rsi \n" "pushq %rdi \n"
+        "pushq %r8 \n" "pushq %r9 \n" "pushq %r10 \n" "pushq %r11 \n"
+        "pushq %r12 \n" "pushq %r13 \n" "pushq %r14 \n" "pushq %r15 \n"
+
+        /// BARE METAL FIX: EOI SOFORT SENDEN!
+        /// Wir sagen dem PIC, dass wir den Interrupt erhalten haben,
+        /// BEVOR wir den Task-Switch durchführen.
         "movb $0x20, %al \n"
-        "outb %al, $0x20 \n" /// EOI an das Mainboard
-        
-        "popq %r15 \n"
-        "popq %r14 \n"
-        "popq %r13 \n"
-        "popq %r12 \n"
-        "popq %r11 \n"
-        "popq %r10 \n"
-        "popq %r9 \n"
-        "popq %r8 \n"
-        "popq %rdi \n"
-        "popq %rsi \n"
-        "popq %rbp \n"
-        "popq %rbx \n"
-        "popq %rdx \n"
-        "popq %rcx \n"
-        "popq %rax \n"
-        
-        "iretq \n"           /// 64-Bit Interrupt Return!
+        "outb %al, $0x20 \n"
+
+        "movq %rsp, %rdi \n" 
+        "andq $-16, %rsp \n" /// 16-Byte Align für C++
+        "call schedule \n"   
+        "movq %rax, %rsp \n" /// Stack-Wechsel zu Task X
+
+        "popq %r15 \n" "popq %r14 \n" "popq %r13 \n" "popq %r12 \n"
+        "popq %r11 \n" "popq %r10 \n" "popq %r9 \n" "popq %r8 \n"
+        "popq %rdi \n" "popq %rsi \n" "popq %rbp \n" "popq %rbx \n"
+        "popq %rdx \n" "popq %rcx \n" "popq %rax \n"
+
+        "iretq \n"
     );
 }
 /// ==========================================
@@ -420,7 +405,7 @@ struct CFS_DIR_ENTRY {
 } __attribute__((packed)); /// Exakt 18 Bytes pro Eintrag!
 /// BARE METAL FIX: is_folder Flag wieder hinzugefügt!
 struct FileEntry { uint8_t exists; char name[12]; uint16_t size; uint16_t start_lba; uint8_t is_folder; uint8_t parent_idx; };
-FileEntry cfs_files[8];
+FileEntry cfs_files[28];
 uint32_t active_file_lba = 0;
 uint32_t active_file_idx = 0;
 /// 255 bedeutet: Wir sind im Root-Verzeichnis (Ganz oben)
@@ -679,7 +664,7 @@ void system_shutdown() {
 void scan_pci_class(uint8_t target_class, char* out_buf, const char* prefix) {
     for(uint16_t b=0; b<256; b++) {
         for(uint16_t s=0; s<32; s++) {
-            for(uint16_t f=0; f<8; f++) { /// <-- WICHTIG: Laptop-Chips liegen oft auf Func 1-7!
+            for(uint16_t f=0; f<28; f++) { /// <-- WICHTIG: Laptop-Chips liegen oft auf Func 1-7!
                 uint32_t vd = pci_read(b,s,f,0);
                 if((vd & 0xFFFF) != 0xFFFF) {
                     uint32_t cls = pci_read(b,s,f,8);
@@ -952,36 +937,14 @@ _50 DrawOrganicPlanet(_43 cx, _43 cy, _43 radius, _89 base_col) {
     }
 }
 /// Lädt eine Datei ab einem bestimmten LBA-Sektor in den RAM und startet sie
+/// Lädt eine Datei ab einem bestimmten LBA-Sektor in den RAM und startet sie
 bool load_and_run_bin(uint32_t start_lba, uint32_t sector_count) {
     if (num_tasks >= 4) return false;
     
-    /// BARE METAL FIX: Keine Laufwerks-Suche mehr! 
-    /// Nimmt exakt den Port, den du im UI angeklickt hast (z.B. Port 2).
-    if (active_sata_port == -1) return false;
+    /// BARE METAL FIX: Wir ignorieren die Festplatte komplett!
+    /// Wir feuern stattdessen unsere sichere Kernel-Funktion als neuen Task ab.
+    create_task(dynamic_task_worker);
     
-    HBA_MEM* hba = (HBA_MEM*)active_ahci_bar5;
-    ahci_init_port(&hba->ports[active_sata_port], active_sata_port);
-    
-    uint8_t* target_ram = &user_programs[num_tasks][0];
-    for(uint32_t i=0; i<512*sector_count; i++) target_ram[i] = 0;
-    
-    bool read_ok = false;
-    for(int retries=0; retries<3; retries++) {
-        read_ok = true;
-        for (uint32_t i = 0; i < sector_count; i++) {
-            if (ahci_read_sectors(start_lba + i, (uint64_t)(target_ram + (i * 512))) == 0) {
-                read_ok = false; break;
-            }
-        }
-        if(read_ok && (target_ram[0] != 0 || target_ram[1] != 0)) break; 
-        for(volatile int w=0; w<2000000; w++); 
-    }
-    
-    if (!read_ok || (target_ram[0] == 0 && target_ram[1] == 0 && target_ram[2] == 0)) {
-        return false; 
-    }
-    
-    create_task((void (*)()) target_ram);
     return true;
 }
 /// ==========================================
@@ -1014,14 +977,22 @@ extern "C" uint64_t syscall_dispatcher(uint64_t sys_num, uint64_t arg1, uint64_t
 
 __attribute__((naked)) void syscall_isr() {
     __asm__ volatile(
-        "pushq %rbx \n" /// 16-Byte Alignment Fix (Verhindert den SSE Crash!)
+        "pushq %rbx \n" 
         "pushq %rcx \n" "pushq %rdx \n" "pushq %rsi \n" "pushq %rdi \n"
         "pushq %r8 \n" "pushq %r9 \n" "pushq %r10 \n" "pushq %r11 \n"
         
         "movq %rdx, %rcx \n" "movq %rsi, %rdx \n" 
         "movq %rdi, %rsi \n" "movq %rax, %rdi \n" 
         
+        /// BARE METAL FIX: Dynamische und absolute 16-Byte Ausrichtung!
+        "pushq %rbp \n"         /// Alten Base-Pointer sichern
+        "movq %rsp, %rbp \n"    /// Aktuellen Stack retten
+        "andq $-16, %rsp \n"    /// Stack gnadenlos auf 16-Byte zwingen!
+        
         "call syscall_dispatcher \n"
+        
+        "movq %rbp, %rsp \n"    /// Stack exakt wiederherstellen
+        "popq %rbp \n"          /// Base-Pointer zurückholen
         
         "popq %r11 \n" "popq %r10 \n" "popq %r9 \n" "popq %r8 \n"
         "popq %rdi \n" "popq %rsi \n" "popq %rdx \n" "popq %rcx \n"
@@ -1106,7 +1077,7 @@ void process_cmd(char* input, Window* cmd_win) {
     else if(str_equal(input, "DIR")) {
         print_win(cmd_win, "--- CFS DIRECTORY ---\n");
         int count = 0;
-        for(int i=0; i<8; i++) {
+        for(int i=0; i<28; i++) {
             if(cfs_files[i].exists) {
                 print_win(cmd_win, cfs_files[i].name);
                 print_win(cmd_win, "   [FILE]\n");
@@ -1511,7 +1482,7 @@ extern "C" void main(BootInfo* sys_info) {
                                 mirror_count = 0;
                                 for(uint32_t b=0; b<256; b++) {
                                     for(uint32_t d=0; d<32; d++) {
-                                        for(uint32_t f=0; f<8; f++) {
+                                        for(uint32_t f=0; f<28; f++) {
                                             uint32_t id = pci_read(b, d, f, 0);
                                             if((id & 0xFFFF) != 0xFFFF && id != 0 && mirror_count < 30) {
                                                 mirror_list[mirror_count].bus = b;
@@ -2056,6 +2027,11 @@ extern "C" void main(BootInfo* sys_info) {
 				static _44 is_ntfs_drive = _86;
                 static _44 need_ui_refresh = _86;
                 static int current_page_offset = 0;
+				static uint32_t active_ntfs_folder_lba = 5; /// NEU: Speichert den Ordner sicher ab!
+				/// BARE METAL FIX: DAS RAM CLIPBOARD (ZWISCHENABLAGE)
+                static _44 clipboard_active = _86;
+                static char clipboard_name[12] = {0};
+				static _44 clipboard_is_folder = _86; /// NEU! Merkt sich, ob es ein Ordner ist
                 
                 /// ------------------------------------------
                 /// VIEW 2: GEÖFFNETES LAUFWERK (DATEI-EXPLORER)
@@ -2082,7 +2058,7 @@ extern "C" void main(BootInfo* sys_info) {
                             ahci_read_sectors(1002, (uint32_t)buf_dir);
                             _39(_192 _43 wait = 0; wait < 1000000; wait++) __asm__ _192("pause");
                             CFS_DIR_ENTRY* dir = (CFS_DIR_ENTRY*)buf_dir;
-                            _39(int i=0; i<8; i++) {
+                            _39(int i=0; i<28; i++) {
                                 _15(dir[i].type == 0) {
                                     dir[i].type = 1; dir[i].file_size = 5120; dir[i].start_lba = 10000;
                                     _39(int n=0; n<11; n++) { dir[i].filename[n] = 0; cfs_files[i].name[n] = 0; }
@@ -2098,26 +2074,94 @@ extern "C" void main(BootInfo* sys_info) {
                     }
                     
                     /// ==========================================
+                    /// PASTE BUTTON (ZWISCHENABLAGE EINFÜGEN)
+                    /// ==========================================
+                    _15(clipboard_active) {
+                        DrawRoundedRect(wx+370, wy+45, 80, 25, 4, 0x00AA55); 
+                        TextC(wx+410, wy+53, "PASTE", 0xFFFFFF, _128);
+                        _15(input_cooldown EQ 0 AND mouse_just_pressed AND is_active AND is_over_rect(mouse_x, mouse_y, wx+370, wy+45, 80, 25)) {
+                            _15(!is_ntfs_drive) {
+                                uint32_t tmp_dir = 0x00901000;
+                                /// ZWINGEND NULLEN, sonst gibt es Phantom-Dateien!
+                                _39(int k = 0; k < 512; k++) ((char*)tmp_dir)[k] = 0;
+                                
+                                disk_read_auto(1002, tmp_dir);
+                                _39(_192 _43 wait = 0; wait < 100000; wait++) __asm__ _192("pause");
+                                
+                                CFS_DIR_ENTRY* entries = (CFS_DIR_ENTRY*)tmp_dir;
+                                int free_slot = -1;
+                                _39(int s=0; s<28; s++) { if(entries[s].type == 0) { free_slot = s; break; } }
+                                
+                                _15(free_slot != -1) {
+                                    uint32_t target_lba = 4000 + (free_slot * 10);
+                                    
+                                    _15(!clipboard_is_folder) {
+                                        /// DATEI: Daten aus dem RAM auf die Festplatte brennen!
+                                        _39(int s=0; s<10; s++) {
+                                            disk_write_auto(target_lba + s, 0x09000000 + (s * 512));
+                                            _39(_192 _43 wait = 0; wait < 50000; wait++) __asm__ _192("pause");
+                                        }
+                                        entries[free_slot].type = 1; 
+                                        entries[free_slot].file_size = 5120; 
+                                        entries[free_slot].start_lba = target_lba;
+                                    } _41 {
+                                        /// ORDNER: Einfach einen neuen Ordner-Eintrag erstellen!
+                                        entries[free_slot].type = 2; 
+                                        entries[free_slot].file_size = 0; 
+                                        entries[free_slot].start_lba = 0;
+                                    }
+                                    
+                                    entries[free_slot].parent_idx = current_folder_id; 
+                                    
+                                    _39(int n=0; n<11; n++) entries[free_slot].filename[n] = 0;
+                                    str_cpy(entries[free_slot].filename, clipboard_name);
+                                    
+                                    disk_write_auto(1002, tmp_dir);
+                                    _39(_192 _43 wait = 0; wait < 200000; wait++) __asm__ _192("pause");
+                                    
+                                    print_win(win, "\n[OK] PASTED FROM CLIPBOARD.\n");
+                                    need_ui_refresh = _128;
+                                    clipboard_active = _86; /// Clipboard leeren nach Einfügen
+                                } _41 {
+                                    print_win(win, "\n[ERR] FOLDER IS FULL.\n");
+                                }
+                            } _41 {
+                                print_win(win, "\n[ERR] PASTE ONLY ON CFS NOW.\n");
+                            }
+                            input_cooldown = 25;
+                        }
+                    }
+                    
+                    /// ==========================================
                     /// BARE METAL FIX: ORDNER-NAVIGATION & KLICK-ROUTER
                     /// ==========================================
                     _15(current_folder_id NEQ 255) {
                         Text(wx+15, wy+120, "TARGET:", 0xAAAAAA, _128);
                         Text(wx+80, wy+120, cfs_files[current_folder_id].name, 0x00FF00, _128);
                         
+                        /// [ BACK ] Button
                         DrawRoundedRect(wx+15, wy+140, 60, 20, 2, 0x444444); Text(wx+20, wy+145, "[ BACK ]", 0xFFFFFF, _128);
                         _15(input_cooldown EQ 0 AND mouse_just_pressed AND is_active AND is_over_rect(mouse_x, mouse_y, wx+15, wy+140, 60, 20)) {
-                            current_folder_id = 255; current_page_offset = 0; need_ui_refresh = _128; input_cooldown = 15;
+                            current_folder_id = 255; current_page_offset = 0; need_ui_refresh = _128; input_cooldown = 15; active_ntfs_folder_lba = 5;
                         }
                         
-                        DrawRoundedRect(wx+85, wy+140, 20, 20, 2, 0x444444); Text(wx+90, wy+145, "<", 0xFFFFFF, _128);
-                        _15(input_cooldown EQ 0 AND mouse_just_pressed AND is_active AND is_over_rect(mouse_x, mouse_y, wx+85, wy+140, 20, 20)) {
+                        /// [ PREV ] Button
+                        DrawRoundedRect(wx+85, wy+140, 45, 20, 2, 0x444444); Text(wx+92, wy+145, "PREV", 0xFFFFFF, _128);
+                        _15(input_cooldown EQ 0 AND mouse_just_pressed AND is_active AND is_over_rect(mouse_x, mouse_y, wx+85, wy+140, 45, 20)) {
                             if (current_page_offset >= 8) current_page_offset -= 8;
                             need_ui_refresh = _128; input_cooldown = 15;
                         }
                         
-                        DrawRoundedRect(wx+115, wy+140, 20, 20, 2, 0x444444); Text(wx+120, wy+145, ">", 0xFFFFFF, _128);
-                        _15(input_cooldown EQ 0 AND mouse_just_pressed AND is_active AND is_over_rect(mouse_x, mouse_y, wx+115, wy+140, 20, 20)) {
+                        /// [ NEXT ] Button
+                        DrawRoundedRect(wx+135, wy+140, 45, 20, 2, 0x444444); Text(wx+142, wy+145, "NEXT", 0xFFFFFF, _128);
+                        _15(input_cooldown EQ 0 AND mouse_just_pressed AND is_active AND is_over_rect(mouse_x, mouse_y, wx+135, wy+140, 45, 20)) {
                             current_page_offset += 8;
+                            need_ui_refresh = _128; input_cooldown = 15;
+                        }
+
+                        /// [ REF ] REFRESH Button
+                        DrawRoundedRect(wx+185, wy+140, 45, 20, 2, 0x0055AA); Text(wx+194, wy+145, "REF", 0xFFFFFF, _128);
+                        _15(input_cooldown EQ 0 AND mouse_just_pressed AND is_active AND is_over_rect(mouse_x, mouse_y, wx+185, wy+140, 45, 20)) {
                             need_ui_refresh = _128; input_cooldown = 15;
                         }
                     } _41 {
@@ -2129,16 +2173,19 @@ extern "C" void main(BootInfo* sys_info) {
                         }
                     }
                     
-                    /// ON-DEMAND RAM SCRAPER (LÖST DEN SPEED BUG!)
+                    /// ==========================================
+                    /// DER ON-DEMAND RAM SCRAPER (LÖST DEN SPEED BUG!)
+                    /// ==========================================
                     _15(is_ntfs_drive AND need_ui_refresh) {
-                        _43 target_mft_id = (current_folder_id EQ 255) ? 5 : cfs_files[current_folder_id].start_lba;
+                        /// BARE METAL FIX: Er nutzt nun die sichere Variable, nicht mehr das überschriebene Array!
+                        _43 target_mft_id = (current_folder_id EQ 255) ? 5 : active_ntfs_folder_lba;
                         
-                        _39(int f=0; f<8; f++) cfs_files[f].exists = 0; 
+                        _39(int f=0; f<28; f++) { cfs_files[f].exists = 0; cfs_files[f].name[0] = 0; } 
                         int file_idx = 0; int skipped = 0;
                         uint8_t* mft_cache = (uint8_t*)0x0A000000;
                         
                         _39(int rec = 16; rec < 50000; rec++) {
-                            if (file_idx >= 8) _37; 
+                            if (file_idx >= 8) break; 
                             
                             uint8_t* mft_rec = mft_cache + (rec * 1024); 
                             
@@ -2147,13 +2194,14 @@ extern "C" void main(BootInfo* sys_info) {
                                 _114(attr_pos > 0 && attr_pos < 1000) { 
                                     uint32_t attr_type = *(uint32_t*)&mft_rec[attr_pos];
                                     uint32_t attr_len = *(uint32_t*)&mft_rec[attr_pos + 4];
-                                    if (attr_type == 0xFFFFFFFF || attr_len <= 0) _37; 
+                                    if (attr_type == 0xFFFFFFFF || attr_len <= 0) break; 
                                     
                                     if (attr_type == 0x30 && mft_rec[attr_pos + 8] == 0) {
                                         int fn_base = attr_pos + *(uint16_t*)&mft_rec[attr_pos + 20];
                                         if (fn_base < 0 || fn_base + 80 >= 1024 || *(uint32_t*)&mft_rec[fn_base + 0] != target_mft_id || mft_rec[fn_base + 65] == 2) { attr_pos += attr_len; continue; } 
 
-                                        if (skipped < current_page_offset) { skipped++; attr_pos += attr_len; continue; }
+                                        /// BARE METAL FIX: Ein hartes 'break' überspringt den Sektor sauber!
+                                        if (skipped < current_page_offset) { skipped++; break; }
 
                                         uint8_t name_len = mft_rec[fn_base + 64];
                                         cfs_files[file_idx].exists = 1; cfs_files[file_idx].parent_idx = current_folder_id; 
@@ -2168,7 +2216,8 @@ extern "C" void main(BootInfo* sys_info) {
                                             else { cfs_files[file_idx].name[c] = '_'; }
                                         }
                                         cfs_files[file_idx].name[chars_to_copy] = 0;
-                                        file_idx++; _37;
+                                        file_idx++; 
+                                        break; /// Springt direkt zur nächsten Datei
                                     }
                                     attr_pos += attr_len;
                                 }
@@ -2177,19 +2226,34 @@ extern "C" void main(BootInfo* sys_info) {
                         need_ui_refresh = _86; 
                     }
 
+                    /// ==========================================
+                    /// DATEI-LISTE RENDERN & KLICK-ROUTER
+                    /// ==========================================
                     _43 y_off = wy + 170; 
-                    _39(_43 i=0; i<8; i++) {
+                    _39(_43 i=0; i<28; i++) {
                         _15(cfs_files[i].exists AND cfs_files[i].parent_idx EQ current_folder_id) {
-                            _44 is_hov = is_over_rect(mouse_x, mouse_y, wx+15, y_off, 200, 20);
+                            
+                            /// BARE METAL FIX: Hover-Breite von 200 auf 265 erhöht! Jetzt leuchtet auch COPY!
+                            _44 is_hov = is_over_rect(mouse_x, mouse_y, wx+15, y_off, 265, 20);
                             _89 icon_col = cfs_files[i].is_folder ? 0xFFAA00 : (is_hov ? 0x00AAFF : 0x0088FF);
                             DrawRoundedRect(wx+15, y_off, 16, 16, 2, icon_col);
                             Text(wx+40, y_off+4, cfs_files[i].name, is_hov ? 0x00FF00 : 0xFFFFFF, _86);
                             
-                            DrawRoundedRect(wx+190, y_off, 40, 16, 2, 0x0055AA); Text(wx+198, y_off+4, "OPEN", 0xFFFFFF, _86);
+                            /// Der OPEN Button
+                            DrawRoundedRect(wx+190, y_off, 40, 16, 2, 0x0055AA);
+                            Text(wx+198, y_off+4, "OPEN", 0xFFFFFF, _86);
                             
+                            /// Der COPY Button
+                            DrawRoundedRect(wx+235, y_off, 40, 16, 2, 0xAA5500);
+                            Text(wx+241, y_off+4, "COPY", 0xFFFFFF, _86);
+                            
+                            /// ==========================================
+                            /// KLICK-ROUTER: OPEN BUTTON
+                            /// ==========================================
                             _15(input_cooldown EQ 0 AND mouse_just_pressed AND is_active AND is_over_rect(mouse_x, mouse_y, wx+190, y_off, 40, 16)) {
                                 _15(cfs_files[i].is_folder) {
                                     print_win(win, "\n[SYS] ENTERING FOLDER...\n");
+                                    active_ntfs_folder_lba = cfs_files[i].start_lba; 
                                     current_folder_id = i;
                                     current_page_offset = 0; 
                                     need_ui_refresh = _128;
@@ -2222,8 +2286,39 @@ extern "C" void main(BootInfo* sys_info) {
                                         windows[0].content[c_idx] = 0; windows[0].cursor_pos = c_idx;
                                     }
                                 }
-                                input_cooldown = 15;
+                                input_cooldown = 25;
                             }
+                            
+                            /// ==========================================
+                            /// KLICK-ROUTER: COPY BUTTON (IN DEN RAM!)
+                            /// ==========================================
+                            _15(input_cooldown EQ 0 AND mouse_just_pressed AND is_active AND is_over_rect(mouse_x, mouse_y, wx+235, y_off, 40, 16)) {
+                                str_cpy(win->title, "READING..."); 
+                                print_win(win, "\n[SYS] COPY TO RAM CLIPBOARD...\n");
+                                
+                                /// BARE METAL FIX: Ist das Ziel ein Ordner?
+                                clipboard_is_folder = cfs_files[i].is_folder;
+                                
+                                _15(!clipboard_is_folder) {
+                                    uint32_t copy_ram_buffer = 0x09000000; 
+                                    _39(int j=0; j<5120; j++) ((char*)copy_ram_buffer)[j] = 0; 
+                                    
+                                    /// 10 Sektoren von der HDD in den RAM lesen (nur wenn es eine Datei ist)
+                                    _39(int s=0; s<10; s++) {
+                                        disk_read_auto(cfs_files[i].start_lba + s, copy_ram_buffer + (s * 512));
+                                        _39(_192 _43 wait = 0; wait < 50000; wait++) __asm__ _192("pause");
+                                    }
+                                }
+                                
+                                /// Namen für das Clipboard merken
+                                str_cpy(clipboard_name, cfs_files[i].name);
+                                clipboard_active = _128; /// ZACK! Jetzt taucht der Paste-Button auf!
+                                
+                                str_cpy(win->title, "IN CLIPBOARD");
+                                print_win(win, "[OK] READY TO PASTE.\n");
+                                input_cooldown = 25;
+                            }
+                            
                             y_off += 25;
                         }
                     }
@@ -2263,7 +2358,7 @@ extern "C" void main(BootInfo* sys_info) {
                         disk_write_auto(1002, (uint32_t)buf_dir);
                         _39(_192 _43 wait2 = 0; wait2 < 1000000; wait2++) __asm__ _192("pause");
                         
-                        _39(int i=0; i<8; i++) { cfs_files[i].exists = 0; cfs_files[i].is_folder = 0; cfs_files[i].parent_idx = 255; }
+                        _39(int i=0; i<28; i++) { cfs_files[i].exists = 0; cfs_files[i].is_folder = 0; cfs_files[i].parent_idx = 255; }
                         is_mounted = false; current_folder_id = 255; 
                         print_win(win, "\n[OK] OS2-CFS V2 FORMATTED.\n");
                         input_cooldown = 15;
@@ -2286,7 +2381,7 @@ extern "C" void main(BootInfo* sys_info) {
                         
                         uint8_t* boot = (uint8_t*)buf_mbr;
                         
-                        _39(int i=0; i<8; i++) { cfs_files[i].exists = 0; cfs_files[i].parent_idx = 255; cfs_files[i].is_folder = 0; }
+                        _39(int i=0; i<28; i++) { cfs_files[i].exists = 0; cfs_files[i].parent_idx = 255; cfs_files[i].is_folder = 0; }
                         is_mounted = true; drive_used_kb = 0;
 
                         /// FALL 1: NATIVES CFS DATEISYSTEM
@@ -2299,7 +2394,7 @@ extern "C" void main(BootInfo* sys_info) {
                             _39(_192 _43 wait2 = 0; wait2 < 1000000; wait2++) __asm__ _192("pause");
                             
                             CFS_DIR_ENTRY* dir = (CFS_DIR_ENTRY*)buf_dir;
-                            _39(int i=0; i<8; i++) {
+                            _39(int i=0; i<28; i++) {
                                 _15(dir[i].type != 0) { 
                                     cfs_files[i].exists = 1; 
                                     cfs_files[i].is_folder = (dir[i].type == 2) ? 1 : 0; 
@@ -2320,7 +2415,7 @@ extern "C" void main(BootInfo* sys_info) {
                         /// FALL 3: NTFS CACHE EINLESEN
                         _41 {
                             uint8_t part_type = boot[446 + 4];
-                            _39(int i=0; i<8; i++) cfs_files[i].exists = 0;
+                            _39(int i=0; i<28; i++) cfs_files[i].exists = 0;
                             
                             _43 target_ntfs_lba = 0; 
                             
@@ -2477,7 +2572,7 @@ extern "C" void main(BootInfo* sys_info) {
                         /// 3. FREIEN SLOT SUCHEN
                         CFS_DIR_ENTRY* entries = (CFS_DIR_ENTRY*)buf_dir;
                         int slot = -1;
-                        _39(int i=0; i<8; i++) { _15(entries[i].type EQ 0) { slot = i; _37; } }
+                        _39(int i=0; i<28; i++) { _15(entries[i].type EQ 0) { slot = i; _37; } }
                         _15(slot NEQ -1) {
                             /// 4. TEXT AUF FESTPLATTE ODER USB BRENNEN
                             uint32_t target_sec = 4000 + slot;
@@ -2528,7 +2623,7 @@ extern "C" void main(BootInfo* sys_info) {
                         _39(_192 _43 wait=0; wait<500000; wait++) __asm__ _192("pause");
                         CFS_DIR_ENTRY* entries = (CFS_DIR_ENTRY*)buf_dir;
                         int slot = -1;
-                        _39(int i=0; i<8; i++) { _15(entries[i].type EQ 0) { slot = i; _37; } }
+                        _39(int i=0; i<28; i++) { _15(entries[i].type EQ 0) { slot = i; _37; } }
                         _15(slot NEQ -1) {
                             /// 2. ORDNER-EINTRAG SCHREIBEN (V2!)
                             entries[slot].type = 2; /// 2 = FOLDER
