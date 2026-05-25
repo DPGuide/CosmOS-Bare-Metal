@@ -373,6 +373,7 @@ _50 read_rtc() {
 /// ==========================================
 uint32_t frame = 0;
 _43 mouse_x = 400, mouse_y = 300; _44 mouse_down = _86, mouse_just_pressed = _86;
+bool mouse_right_down = false; // Speichert, ob rechts gedrückt ist
 int mouse_sub_x = 40000;
 int mouse_sub_y = 30000;
 /// Deine einstellbare Sensitivität! 
@@ -407,7 +408,7 @@ void update_mouse_position(int dx, int dy, int btn) {
     mouse_x = new_x;
     mouse_y = new_y;
 
-    /// 5. Klick-Logik
+    /// 5. Klick-Logik (Links)
     if (btn & 1) { 
         if (!mouse_down) mouse_just_pressed = _128; 
         else mouse_just_pressed = _86;
@@ -415,6 +416,15 @@ void update_mouse_position(int dx, int dy, int btn) {
     } else {
         mouse_down = _86;
         mouse_just_pressed = _86;
+    }
+
+    // ==========================================
+    // BARE METAL FIX: RECHTSKLICK AUSLESEN!
+    // ==========================================
+    if (btn & 2) {
+        mouse_right_down = true;
+    } else {
+        mouse_right_down = false;
     }
 }
 _72 _184 m_packet[3]; _72 _43 m_ptr = 0;
@@ -916,7 +926,14 @@ Vec3 RotateX(Vec3 p, float angle) {
 
 // 2. GLOBALE KAMERA
 float camera_fov = 500.0f;     
-float camera_z_offset = 4.0f;  
+float camera_z_offset = 600.0f;
+// ==========================================
+// KAMERA-GEDÄCHTNIS (Außerhalb der Main-Loop!)
+// ==========================================
+float global_cam_rot_x = 0.0f;
+float global_cam_rot_y = 0.0f;
+int last_mouse_x = 400; // Startwert (Mitte)
+int last_mouse_y = 300; // Startwert (Mitte) 
 
 // 3. PIXEL-ZEICHNER (Mit Hardware-Pitch-Schutz!)
 void PutPixel(uint32_t x, uint32_t y, uint32_t color) {
@@ -1160,6 +1177,70 @@ _50 DrawActiveSun(_43 cx, _43 cy, _43 radius) {
                         }
                     }
                 }
+            }
+        }
+    }
+}
+// ==========================================
+// BARE METAL 3D SOLAR SYSTEM
+// ==========================================
+
+// ==========================================
+// BARE METAL 3D SOLAR SYSTEM
+// ==========================================
+struct RenderObj {
+    int type;           // 0 = Sonne, 1 = Planet
+    Vec3 pos;           // 3D Position im Raum
+    float radius;       // Echter Radius
+    uint32_t color;     // Grundfarbe
+};
+
+Vec2 Project3D(Vec3 point, int cx, int cy) {
+    float z = point.z + camera_z_offset;
+    if (z <= 0.1f) return { -1, -1 }; 
+    float projected_x = (point.x / z) * camera_fov;
+    float projected_y = (point.y / z) * camera_fov;
+    return { cx + (int)projected_x, cy - (int)projected_y };
+}
+
+void DrawPlanet3D(Vec3 pos, float radius, uint32_t color, int cx, int cy) {
+    float z = pos.z + camera_z_offset;
+    if (z <= 0.1f) return; // Planet ist hinter der Kamera!
+
+    Vec2 center = Project3D(pos, cx, cy);
+    if (center.x == -1) return;
+    
+    // Die Perspektive: Radius wird kleiner, je weiter weg der Planet ist!
+    int screen_r = (int)((radius / z) * camera_fov);
+    if (screen_r <= 0) return;
+
+    int start_y = -screen_r; int end_y = screen_r;
+    int start_x = -screen_r; int end_x = screen_r;
+    
+    if (center.y + start_y < 0) start_y = -center.y;
+    if (center.y + end_y >= screen_h) end_y = screen_h - 1 - center.y;
+    if (center.x + start_x < 0) start_x = -center.x;
+    if (center.x + end_x >= screen_w) end_x = screen_w - 1 - center.x;
+
+    int r2 = screen_r * screen_r;
+    uint32_t cr = (color >> 16) & 0xFF;
+    uint32_t cg = (color >> 8) & 0xFF;
+    uint32_t cb = color & 0xFF;
+
+    for (int y = start_y; y <= end_y; y++) {
+        uint32_t* row_ptr = (uint32_t*)((uint8_t*)bb + ((center.y + y) * screen_pitch));
+        for (int x = start_x; x <= end_x; x++) {
+            int dist_sq = x*x + y*y;
+            if (dist_sq <= r2) {
+                // Simpler Fake-3D-Schatten (Kugel-Wölbung)
+                int pz = int_sqrt(r2 - dist_sq);
+                float light = (float)pz / (float)screen_r; 
+                
+                uint32_t final_r = (uint32_t)(cr * light);
+                uint32_t final_g = (uint32_t)(cg * light);
+                uint32_t final_b = (uint32_t)(cb * light);
+                
+                row_ptr[center.x + x] = (final_r << 16) | (final_g << 8) | final_b;
             }
         }
     }
@@ -2175,11 +2256,106 @@ extern "C" void main(BootInfo* boot_info) {
         }
         _15(galaxy_open AND galaxy_expansion < 320) galaxy_expansion += 24;
         _15(!galaxy_open AND galaxy_expansion > 0) galaxy_expansion -= 30;
+        
         DrawDenseGalaxy(v_cx, v_cy, galaxy_expansion);
-        //DrawActiveSun(v_cx, v_cy, 50);
-        DrawActiveSun(400, 300, 80); // (X, Y, Radius)
+        
+        // ==========================================
+        // 3D ORBIT-PHYSIK & Z-SORTIERUNG (ECHTES SYSTEM)
+        // ==========================================
+        
+        // 1. Die Geschwindigkeiten (Je weiter draußen, desto langsamer!)
+        float t_mer = frame * 0.041f;
+        float t_ven = frame * 0.016f;
+        float t_ear = frame * 0.010f;
+        float t_mar = frame * 0.005f;
+        float t_jup = frame * 0.001f;
+        float t_sat = frame * 0.0005f;
+        float t_ura = frame * 0.0002f;
+        float t_nep = frame * 0.0001f;
+
+        // 2. Die Umlaufbahnen (Leichte Neigungen für einen organischen 3D-Look)
+        Vec3 p1_mer = { bare_cos(t_mer) * 140.0f,  5.0f * bare_sin(t_mer), bare_sin(t_mer) * 140.0f };
+        Vec3 p2_ven = { bare_cos(t_ven) * 180.0f, -3.0f * bare_sin(t_ven), bare_sin(t_ven) * 180.0f };
+        Vec3 p3_ear = { bare_cos(t_ear) * 230.0f,  0.0f,                   bare_sin(t_ear) * 230.0f };
+        Vec3 p4_mar = { bare_cos(t_mar) * 280.0f,  8.0f * bare_sin(t_mar), bare_sin(t_mar) * 280.0f };
+        Vec3 p5_jup = { bare_cos(t_jup) * 400.0f, -10.0f* bare_sin(t_jup), bare_sin(t_jup) * 400.0f };
+        Vec3 p6_sat = { bare_cos(t_sat) * 520.0f,  15.0f* bare_sin(t_sat), bare_sin(t_sat) * 520.0f };
+        Vec3 p7_ura = { bare_cos(t_ura) * 640.0f, -5.0f * bare_sin(t_ura), bare_sin(t_ura) * 640.0f };
+        Vec3 p8_nep = { bare_cos(t_nep) * 750.0f,  2.0f * bare_sin(t_nep), bare_sin(t_nep) * 750.0f };
+
+        // 3. Das Universum auflisten (9 Objekte!)
+        RenderObj system[9] = {
+            { 0, {0, 0, 0}, 80,  0 },                  // Sonne (Kocht!)
+            { 1, p1_mer,     3,  0xAAAAAA },           // Merkur (Winzig, Grau)
+            { 1, p2_ven,     7,  0xFFDD88 },           // Venus (Hellgelb)
+            { 1, p3_ear,     8,  0x0088FF },           // Erde (Blau)
+            { 1, p4_mar,     5,  0xFF4400 },           // Mars (Rostrot)
+            { 1, p5_jup,    24,  0xDDAA77 },           // Jupiter (Gigantisch, Braun/Orange)
+            { 1, p6_sat,    20,  0xEEDD99 },           // Saturn (Blassgelb)
+            { 1, p7_ura,    12,  0x66CCFF },           // Uranus (Hellblau)
+            { 1, p8_nep,    11,  0x2244AA }            // Neptun (Dunkelblau)
+        };
+
+        // ==========================================
+        // 4. DIE INTERAKTIVE KAMERA (Rechte Maustaste)
+        // ==========================================
+        
+        // Wir fragen einfach unsere neue globale Variable ab!
+        bool right_mouse_held = mouse_right_down; 
+
+        // Nur wenn die rechte Maustaste gedrückt ist, drehen wir das Universum!
+        if (right_mouse_held) {
+            global_cam_rot_y += (mouse_x - last_mouse_x) * -0.005f; 
+            global_cam_rot_x += (mouse_y - last_mouse_y) * -0.005f; 
+        }
+        
+        last_mouse_x = mouse_x;
+        last_mouse_y = mouse_y;
+        
+        // Sinus/Kosinus aus den globalen Winkeln ziehen
+        float sy = bare_sin(global_cam_rot_y); float cy = bare_cos(global_cam_rot_y);
+        float sx = bare_sin(global_cam_rot_x); float cx = bare_cos(global_cam_rot_x);
+
+        // Die 9 Objekte rotieren
+        for (int i = 0; i < 9; i++) {
+            Vec3 p = system[i].pos;
+            float nx = p.x * cy - p.z * sy;
+            float nz = p.x * sy + p.z * cy;
+            p.x = nx; p.z = nz;
+
+            float ny = p.y * cx - p.z * sx;
+            nz = p.y * sx + p.z * cx;
+            p.y = ny; p.z = nz;
+            
+            system[i].pos = p; 
+        }
+
+        // 5. BUBBLE SORT FÜR 9 OBJEKTE (Z-Tiefe)
+        // Die innere Schleife geht bis 8 (j+1 erreicht maximal 8)
+        for (int i = 0; i < 9; i++) {
+            for (int j = 0; j < 8; j++) {
+                if (system[j].pos.z < system[j+1].pos.z) {
+                    RenderObj temp = system[j];
+                    system[j] = system[j+1];
+                    system[j+1] = temp;
+                }
+            }
+        }
+
+        // 6. ZEICHNEN der sortierten Liste
+        for (int i = 0; i < 9; i++) {
+            if (system[i].type == 0) {
+                Vec2 s_2d = Project3D(system[i].pos, v_cx, v_cy);
+                if (s_2d.x != -1) {
+                    DrawActiveSun(s_2d.x, s_2d.y, system[i].radius);
+                }
+            } else {
+                DrawPlanet3D(system[i].pos, system[i].radius, system[i].color, v_cx, v_cy);
+            }
+        }
+
         /// ==========================================
-        /// LIVE RTC (DATUM UND UHRZEIT) IN DER SONNE
+        /// LIVE RTC (DATUM UND UHRZEIT) ALS HUD ÜBER ALLEM
         /// ==========================================
         TextC(v_cx, v_cy-15, "COSMOS", 0x000000, _128);
         TextC(v_cx, v_cy+5,  "SYSTEM", 0x000000, _128);
