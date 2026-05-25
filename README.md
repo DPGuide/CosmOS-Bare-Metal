@@ -19,7 +19,8 @@ OS2 16 - 64 Bit Bare Metal
   ***update 12.05.2026***
 + + copy + paste files or empty folder
 + + more stable
-+ + fixeing *.bin to run them , qemu have worked , but never on hardware . at the moment its bugged 
++ + fixeing *.bin to run them , qemu have worked , but never on hardware . at the moment its bugged
+  + 3D Grafic
 
  ******
   ***kernel.cpp is OS1 x32 - kernel_main.cpp is OS2 x64***
