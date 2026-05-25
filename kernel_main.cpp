@@ -69,6 +69,7 @@ void internal_test_task() {
         __asm__ volatile("int $0x80" : : "a"(0LL)); 
     }
 }
+
 /// ==========================================
 /// BARE METAL FIX: GLOBALE HARDWARE-TIMER & SCHEDULER
 /// ==========================================
@@ -943,16 +944,77 @@ void PutPixel(uint32_t x, uint32_t y, uint32_t color) {
 }
 
 // 4. PROJEKTION (3D Welt -> 2D Monitor)
-Vec2 Project3D(Vec3 point) {
+// ==========================================
+// BARE METAL 3D PROJEKTION (Aufgerüstet)
+// ==========================================
+Vec2 Project3D(Vec3 point, int cx, int cy) {
     float z = point.z + camera_z_offset;
+    
+    // Verhindern, dass Objekte hinter der Kamera gezeichnet werden (Division durch Null / Clipping)
     if (z <= 0.1f) return { -1, -1 }; 
     
+    // Die Perspektiven-Division (3D -> 2D)
     float projected_x = (point.x / z) * camera_fov;
     float projected_y = (point.y / z) * camera_fov;
     
-    int screen_x = (int)(screen_w / 2) + projected_x;
-    int screen_y = (int)(screen_h / 2) - projected_y; 
-    return { screen_x, screen_y };
+    // Wir projizieren es relativ zum übergebenen Zentrum (cx, cy)!
+    return { cx + (int)projected_x, cy - (int)projected_y };
+}
+// ==========================================
+// BARE METAL 3D: DER DREIECKS-RASTERIZER
+// ==========================================
+
+// ==========================================
+// BARE METAL 3D: DER DREIECKS-RASTERIZER (Kugelsicher!)
+// ==========================================
+
+// Wir nutzen float für die Mathematik. Das verhindert Integer-Overflows 
+// und ignoriert eventuelle 'unsigned' Probleme aus deiner Vec2 Struct!
+float EdgeFunction(Vec2 a, Vec2 b, int px, int py) {
+    return ((float)px - (float)a.x) * ((float)b.y - (float)a.y) - ((float)py - (float)a.y) * ((float)b.x - (float)a.x);
+}
+
+void DrawTriangle(Vec2 v0, Vec2 v1, Vec2 v2, uint32_t color) {
+    // Sicheres Casting auf int
+    int v0x = (int)v0.x; int v0y = (int)v0.y;
+    int v1x = (int)v1.x; int v1y = (int)v1.y;
+    int v2x = (int)v2.x; int v2y = (int)v2.y;
+
+    // 1. Bounding Box berechnen
+    int min_x = v0x; if (v1x < min_x) min_x = v1x; if (v2x < min_x) min_x = v2x;
+    int min_y = v0y; if (v1y < min_y) min_y = v1y; if (v2y < min_y) min_y = v2y;
+    int max_x = v0x; if (v1x > max_x) max_x = v1x; if (v2x > max_x) max_x = v2x;
+    int max_y = v0y; if (v1y > max_y) max_y = v1y; if (v2y > max_y) max_y = v2y;
+    
+    // 2. RAM-Schutzpanzer! 
+    if (min_x < 0) min_x = 0;
+    if (min_y < 0) min_y = 0;
+    if (max_x >= screen_w) max_x = screen_w - 1;
+    if (max_y >= screen_h) max_y = screen_h - 1;
+    
+    // 3. Pixel-Schleife feuern!
+    for (int y = min_y; y <= max_y; y++) {
+        uint32_t* row_ptr = (uint32_t*)((uint8_t*)bb + (y * screen_pitch));
+        for (int x = min_x; x <= max_x; x++) {
+            
+            float w0 = EdgeFunction(v1, v2, x, y);
+            float w1 = EdgeFunction(v2, v0, x, y);
+            float w2 = EdgeFunction(v0, v1, x, y);
+            
+            // Wenn der Pixel drin ist, zeichnen!
+            if ((w0 >= 0 && w1 >= 0 && w2 >= 0) || (w0 <= 0 && w1 <= 0 && w2 <= 0)) {
+                row_ptr[x] = color;
+            }
+        }
+    }
+}
+
+void DrawTriangle3D(Vec3 p0, Vec3 p1, Vec3 p2, uint32_t color, int cx, int cy) {
+    Vec2 v0 = Project3D(p0, cx, cy);
+    Vec2 v1 = Project3D(p1, cx, cy);
+    Vec2 v2 = Project3D(p2, cx, cy);
+    if (v0.x == -1 || v1.x == -1 || v2.x == -1) return;
+    DrawTriangle(v0, v1, v2, color);
 }
 
 // 5. 2D-LINIEN-ZEICHNER (Bresenham Algorithmus)
@@ -973,12 +1035,18 @@ void DrawLine(int x0, int y0, int x1, int y1, uint32_t color) {
 }
 
 // 6. 3D-LINIEN-ZEICHNER (Die Brücke zwischen 3D und 2D)
-void DrawLine3D(Vec3 p1, Vec3 p2, uint32_t color) {
-    Vec2 v1 = Project3D(p1);
-    Vec2 v2 = Project3D(p2);
-    if (v1.x != -1 && v2.x != -1) {
-        DrawLine(v1.x, v1.y, v2.x, v2.y, color);
-    }
+// ==========================================
+// BARE METAL 3D: LINIEN-ZEICHNER (Update)
+// ==========================================
+void DrawLine3D(Vec3 p1, Vec3 p2, uint32_t color, int cx, int cy) {
+    Vec2 v1 = Project3D(p1, cx, cy);
+    Vec2 v2 = Project3D(p2, cx, cy);
+    
+    // Z-Clipping: Wenn ein Punkt hinter der Kamera ist (-1), zeichne die Linie nicht!
+    if (v1.x == -1 || v2.x == -1) return;
+    
+    // Hier ruft er deine 2D DrawLine Funktion auf (die du schon hast)
+    DrawLine(v1.x, v1.y, v2.x, v2.y, color); 
 }
 _50 Put(_43 x, _43 y, _89 c) { _15(x<0 OR x>=800 OR y<0 OR y>=600) _96; bb[y*800+x]=c; }
 _50 PutAlpha(_43 x, _43 y, _89 c) { _15(x<0 OR x>=800 OR y<0 OR y>=600) _96; _89 bg = bb[y*800+x]; _89 s1 = ((c & 0xFEFEFE) >> 1) + ((bg & 0xFEFEFE) >> 1); bb[y*800+x] = ((s1 & 0xFEFEFE) >> 1) + ((bg & 0xFEFEFE) >> 1); }
@@ -1194,14 +1262,6 @@ struct RenderObj {
     float radius;       // Echter Radius
     uint32_t color;     // Grundfarbe
 };
-
-Vec2 Project3D(Vec3 point, int cx, int cy) {
-    float z = point.z + camera_z_offset;
-    if (z <= 0.1f) return { -1, -1 }; 
-    float projected_x = (point.x / z) * camera_fov;
-    float projected_y = (point.y / z) * camera_fov;
-    return { cx + (int)projected_x, cy - (int)projected_y };
-}
 
 void DrawPlanet3D(Vec3 pos, float radius, uint32_t color, int cx, int cy) {
     float z = pos.z + camera_z_offset;
@@ -2353,6 +2413,65 @@ extern "C" void main(BootInfo* boot_info) {
                 DrawPlanet3D(system[i].pos, system[i].radius, system[i].color, v_cx, v_cy);
             }
         }
+		// ==========================================
+        // 7. 3D POLYGON-TEST: IMPERIALER STERNENKREUZER / ZERSTÖRER
+        // ==========================================
+        //float station_rot = frame * 0.025f; // Etwas langsamer für die massive Wucht!
+        //float sr = bare_sin(station_rot);
+        //float cr = bare_cos(station_rot);
+		//
+        //// Der Bauplan: 10 strategische Eckpunkte im 3D-Raum
+        //Vec3 ship[10] = {
+        //    {   0.0f,   0.0f,  110.0f},  // 0: Die rasiermesserscharfe Bugspitze (Nose)
+        //    { -50.0f,   5.0f,  -50.0f},  // 1: Heck oben links
+        //    {  50.0f,   5.0f,  -50.0f},  // 2: Heck oben rechts
+        //    { -50.0f,  -5.0f,  -50.0f},  // 3: Heck unten links
+        //    {  50.0f,  -5.0f,  -50.0f},  // 4: Heck unten rechts
+        //    {   0.0f,  28.0f,  -25.0f},  // 5: Kommandobrücke Dach (Spitze)
+        //    { -15.0f,   5.0f,  -30.0f},  // 6: Brückenbasis hinten links
+        //    {  15.0f,   5.0f,  -30.0f},  // 7: Brückenbasis hinten rechts
+        //    {   0.0f,   5.0f,   -5.0f},  // 8: Brückenbasis vorne (Schildkeil)
+        //    {   0.0f,   0.0f,  -50.0f}   // 9: Heckmitte (Triebwerksschott)
+        //};
+		//
+        //// Die Matrix-Schleife: Zerstörer rotieren und im Raum parken
+        //for (int i = 0; i < 10; i++) {
+        //    // Um die Y-Achse rotieren (Drehung auf der Stelle)
+        //    float nx = ship[i].x * cr - ship[i].z * sr;
+        //    float nz = ship[i].x * sr + ship[i].z * cr;
+        //    ship[i].x = nx; 
+        //    ship[i].z = nz;
+        //    
+        //    // Positionierung: Schwebt massiv vor der Sonne bei Z = -190
+        //    ship[i].x += 0.0f; 
+        //    ship[i].y += -15.0f; // Leicht nach unten versetzt für perfekte Sicht
+        //    ship[i].z -= 190.0f; 
+        //}
+		//
+        //// ==========================================
+        //// RASTER PIPELINE: Die Panzerplatten schweißen
+        //// (Sortiert von hinten nach vorne für den Painter's Algorithm!)
+        //// ==========================================
+        //
+        //// 1. Das Heck & Triebwerksschott (Dunkles Schatten-Graugrün)
+        //DrawTriangle3D(ship[1], ship[9], ship[3], 0x0c1a0c, v_cx, v_cy);
+        //DrawTriangle3D(ship[2], ship[4], ship[9], 0x0c1a0c, v_cx, v_cy);
+        //
+        //// 2. Die massive Unterseite (Stark im Schatten)
+        //DrawTriangle3D(ship[0], ship[3], ship[4], 0x142b14, v_cx, v_cy);
+        //
+        //// 3. Die messerscharfen Seitenflanken
+        //DrawTriangle3D(ship[0], ship[1], ship[3], 0x234a23, v_cx, v_cy); // Flanke Links
+        //DrawTriangle3D(ship[0], ship[4], ship[2], 0x2d5e2d, v_cx, v_cy); // Flanke Rechts
+        //
+        //// 4. Das gewaltige Hauptdeck (Mittelgrün - fängt das Sonnenlicht)
+        //DrawTriangle3D(ship[0], ship[2], ship[1], 0x3c7d3c, v_cx, v_cy);
+        //
+        //// 5. Die Brücken-Aufbauten (Hellgrüne Akzente für epische Tiefenwirkung!)
+        //DrawTriangle3D(ship[8], ship[6], ship[7], 0x4b9c4b, v_cx, v_cy); // Turm-Deck
+        //DrawTriangle3D(ship[5], ship[6], ship[8], 0x5cbd5c, v_cx, v_cy); // Brücke Wand Links
+        //DrawTriangle3D(ship[5], ship[8], ship[7], 0x70de70, v_cx, v_cy); // Brücke Wand Rechts (Reflektion)
+        //DrawTriangle3D(ship[5], ship[7], ship[6], 0x2d5e2d, v_cx, v_cy); // Brücke Rückwand
 
         /// ==========================================
         /// LIVE RTC (DATUM UND UHRZEIT) ALS HUD ÜBER ALLEM
