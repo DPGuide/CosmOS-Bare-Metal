@@ -44,7 +44,7 @@ void xhci_submit_mouse_read() {
     uint64_t buffer_addr = 0x06500000 + (mouse_trb_idx * 8);
     
     volatile uint8_t* prep_buf = (volatile uint8_t*)buffer_addr;
-    for(int i=0; i<8; i++) prep_buf[i] = 0;
+    for(int i=0; i<28; i++) prep_buf[i] = 0;
     
     /// BARE METAL FIX: Die 64-Bit Adresse sauber in zwei 32-Bit Blöcke (TRB 0 und 1) aufteilen!
     in_ring[mouse_trb_idx * 4 + 0] = (uint32_t)(buffer_addr & 0xFFFFFFFF); 
@@ -83,14 +83,17 @@ struct UHCI_TD {
 _89* uhci_frame_list = (_89*)0x02000000; 
 UHCI_TD* current_td  = (UHCI_TD*)0x02001000;
 
-_44 uhci_execute_td(_89 pid, _43 dev_addr, _43 ep, void* buffer, _43 len) {
+_89 bulk_toggle_out = 0;
+_89 bulk_toggle_in = 0;
+
+_44 uhci_execute_td(_89 pid, _43 dev_addr, _43 ep, void* buffer, _43 len, _89 toggle) {
     _15(usb_io_base EQ 0) _96 _86;
     outw(usb_io_base + 8, 0x02000000 & 0xFFFF);
     outw(usb_io_base + 10, 0x02000000 >> 16);
     current_td->link_ptr = 1;
     current_td->ctrl_status = (1 << 23) | (3 << 27);
     _89 max_len = (len > 0) ? (len - 1) : 0x7FF; 
-    current_td->token = (max_len << 21) | (0 << 19) | (ep << 15) | (dev_addr << 8) | pid;
+    current_td->token = (max_len << 21) | ((toggle & 1) << 19) | ((ep & 0x0F) << 15) | (dev_addr << 8) | pid;
     current_td->buffer_ptr = (_89)(uint64_t)buffer;
     _39(_43 i=0; i<1024; i++) uhci_frame_list[i] = (_89)(uint64_t)current_td;
     outw(usb_io_base, inw(usb_io_base) | 0x0001);
@@ -105,28 +108,42 @@ _44 uhci_execute_td(_89 pid, _43 dev_addr, _43 ep, void* buffer, _43 len) {
 }
 
 _44 usb_bulk_out(_43 dev_addr, _43 ep, void* buffer, _43 len) {
-    _96 uhci_execute_td(0xE1, dev_addr, ep, buffer, len); 
+    _44 res = uhci_execute_td(0xE1, dev_addr, ep, buffer, len, bulk_toggle_out); 
+    bulk_toggle_out ^= 1;
+    _96 res;
 }
 _44 usb_bulk_in(_43 dev_addr, _43 ep, void* buffer, _43 len) {
-    _96 uhci_execute_td(0x69, dev_addr, ep, buffer, len); 
+    _44 res = uhci_execute_td(0x69, dev_addr, ep, buffer, len, bulk_toggle_in); 
+    bulk_toggle_in ^= 1;
+    _96 res;
 }
 
 /// ==========================================
 /// XHCI INITIALISIERUNG (FINAL WIRE-UP)
 /// ==========================================
 extern char hw_usb[48]; 
+extern char cmd_status[256];
 extern void str_cpy(char* d, const char* s); 
 
 extern uint32_t xhci_db_base;
 extern uint32_t* xhci_dcbaa;
 extern void xhci_power_on_ports(uint32_t op_base, int max_ports);
-extern void xhci_check_ports(uint32_t op_base, int max_ports);
+extern uint8_t xhci_check_ports(uint32_t op_base, int max_ports);
+extern "C" uint32_t xhci_bot_get_capacity(uint8_t slot_id);
 
 void init_xhci(uint32_t bar0) {}
 extern _50 xhci_bios_handoff(_89 cap_base);
 
+extern void map_mmio_64(uint64_t phys_addr);
+
 int init_xhci_probe(uint32_t bar0, int id) {
     global_xhci_base_addr = bar0;
+    
+    /// BARE METAL FIX: xHCI MMIO muss in den 64-Bit Page Tables gemappt sein!
+    map_mmio_64(bar0);
+    /// Der xHCI BAR kann mehrere 2MB-Regionen umfassen
+    map_mmio_64(bar0 + 0x200000);
+    
     xhci_bios_handoff(global_xhci_base_addr);
     uint8_t caplength = *((volatile uint8_t*)global_xhci_base_addr);
     
@@ -174,6 +191,12 @@ _44 uhci_execute_control(_43 dev_addr) {
     outw(usb_io_base, inw(usb_io_base) | 0x0001); 
     _43 timeout = 1000000;
     _114((current_td->ctrl_status & (1 << 23)) AND timeout > 0) { __asm__ _192("pause"); timeout--; }
+	// DEBUG-INFO HINZUFÜGEN:
+    _15(current_td->ctrl_status & 0x7E0000) {
+        // Hier könntest du dir den Error-Code ausgeben lassen:
+        // Bit 17=CRC, 18=Bitstuff, 19=STALL, 20=NAK, 21=Babble, 22=DB
+        str_cpy(cmd_status, "USB: CONTROL ERROR DETECTED");
+    }
     outw(usb_io_base, inw(usb_io_base) & ~0x0001); 
     _15(timeout EQ 0 OR (current_td->ctrl_status & 0x7E0000)) _96 _86;
     current_td->link_ptr = 1;
@@ -198,10 +221,10 @@ _44 usb_enumerate_device(_43 port_idx, _43 new_address) {
     uhci_safe_delay(1000000);
     safe_p = inw(port_reg) & 0xFFD5;
     outw(port_reg, safe_p & ~0x0200);
-    uhci_safe_delay(100000);
+    uhci_safe_delay(250000);
     safe_p = inw(port_reg) & 0xFFD5;
     outw(port_reg, safe_p | 0x0004); 
-    uhci_safe_delay(100000);
+    uhci_safe_delay(250000);
     _15(!(inw(port_reg) & 0x0004)) _96 _86;
     global_setup->request_type = 0x00; 
     global_setup->request = 0x05;      
@@ -209,7 +232,7 @@ _44 usb_enumerate_device(_43 port_idx, _43 new_address) {
     global_setup->index = 0;
     global_setup->length = 0;
     _15(!uhci_execute_control(0)) _96 _86;
-    uhci_safe_delay(100000);
+    uhci_safe_delay(250000);
     global_setup->request_type = 0x00;
     global_setup->request = 0x09;      
     global_setup->value = 1;           
@@ -325,5 +348,94 @@ void xhci_poll_events_and_mouse() {
         if (total_dx != 0 || total_dy != 0 || final_btn != 0) {
             usb_mouse_callback(total_dx, total_dy, final_btn); 
         }
+    }
+}
+/// ==========================================
+/// BARE METAL FIX: USB ROOT HUB AUTO-SCANNER
+/// ==========================================
+
+/// 1. Dem Compiler beibringen, wie ein DriveInfo aussieht!
+_202 DriveInfo { _43 type; _43 size_mb; _43 base_port; _30 model[41]; };
+
+/// 2. Saubere 'extern' (_172) Referenzen auf die globalen Variablen!
+_172 DriveInfo drives[8];
+_172 _43 drive_count;
+_172 _30 cmd_status[256];
+
+extern "C" _50 usb_scan_and_mount() {
+    _43 usb_found = 0;
+    
+    /// BARE METAL FIX: xHCI (USB 3.0) SCAN FIRST
+    _15(global_xhci_base_addr NEQ 0 AND drive_count < 8) {
+        uint8_t caplength = *((volatile uint8_t*)global_xhci_base_addr);
+        uint32_t op_base = global_xhci_base_addr + caplength;
+        
+        str_cpy(cmd_status, "xHCI: POWERING PORTS...");
+        xhci_power_on_ports(op_base, 8); 
+        
+        str_cpy(cmd_status, "xHCI: SCANNING PORTS...");
+        uint8_t slot_id = xhci_check_ports(op_base, 8);
+        
+        _15(slot_id > 0) {
+            str_cpy(cmd_status, "xHCI: READING CAPACITY...");
+            _43 size_mb = xhci_bot_get_capacity(slot_id);
+            
+            _15(size_mb > 0 AND drive_count < 8) {
+                /// Only add on full success
+                drives[drive_count].type = 3;
+                drives[drive_count].size_mb = size_mb;
+                drives[drive_count].base_port = slot_id;
+                str_cpy(drives[drive_count].model, "USB 3.0 FLASH DRIVE");
+                drive_count++;
+                usb_found++;
+            } _41 {
+                str_cpy(cmd_status, "xHCI: SLOT OK, NO CAPACITY");
+            }
+        } _41 {
+            str_cpy(cmd_status, "xHCI: NO DEVICE FOUND");
+        }
+    }
+
+    /// UHCI (USB 1.1) SCAN
+    _15(usb_io_base NEQ 0) {
+        /// Ein UHCI-Root-Hub hat standardmäßig 2 Ports
+        _39(_43 p = 0; p < 2; p++) {
+            _182 port_reg = usb_io_base + 0x10 + (p * 2);
+            
+            /// Bit 0: Ist ein Gerät eingesteckt?
+            _15(inw(port_reg) & 0x0001 AND drive_count < 8) { 
+                
+                /// --- PORT RESET ---
+                outw(port_reg, 0x0200);
+                _39(_43 wait=0; wait<1000000; wait++) __asm__ ("pause"); 
+                outw(port_reg, 0x0000);
+                _39(_43 wait=0; wait<1000000; wait++) __asm__ ("pause"); 
+                outw(port_reg, 0x0004 | 0x0002);
+                _39(_43 wait=0; wait<1000000; wait++) __asm__ ("pause"); 
+
+                /// Port enabled?
+                _15(inw(port_reg) & 0x0004) {
+                    _43 dev_addr = p + 1;
+                    
+                    /// Enumerate (assign address)
+                    _15(usb_enumerate_device(p, dev_addr)) {
+                        _43 size_mb = usb_bot_get_capacity(dev_addr, 0x01, 0x81);
+                        
+                        _15(size_mb > 0) {
+                            /// Only add to list on full success
+                            drives[drive_count].size_mb = size_mb;
+                            drives[drive_count].type = 3; 
+                            drives[drive_count].base_port = dev_addr;
+                            str_cpy(drives[drive_count].model, "USB FLASH DRIVE");
+                            drive_count++;
+                            usb_found++;
+                        }
+                    }
+                }
+            }
+        }    
+    }
+    _15(usb_found > 0) {
+        str_cpy(cmd_status, "USB: FLASH DRIVES MOUNTED!");
     }
 }

@@ -50,6 +50,7 @@ void operator delete(void* ptr, size_t size) noexcept { free(ptr); }
 /// BARE METAL FIX: Globale Ports für die AC97 Soundkarte
 _182 ac97_mixer_port = 0;
 _182 ac97_bus_port = 0;
+_50 play_earthquake(_43 duration);
 _182 uhci_base_port = 0;
 _172 _50 net_check_link();
 _172 _44 ahci_read_sectors(_43 port_no, _43 lba, _43 count, _89 buffer_addr);
@@ -73,7 +74,7 @@ _44 is_ntfs = 0;
 _172 _50 tba_record_frame(_182 sensor_val, _184 r, _184 g, _184 b, _184 a);
 _172 HBA_PORT* get_active_ahci_port();
 _172 _43 ahci_scan_state;
-_172 _50 ahci_mount_drive();
+extern "C" void ahci_mount_drive();
 _172 _50 ahci_panzer_scan_tick();
 _172 _89 global_ahci_abar;
 /// Die Datenstruktur für unsere Festplatten (Der Bauplan)
@@ -1063,11 +1064,35 @@ _50 play_ac97_suction() {
 /// ==========================================
 _50 play_ac97_earthquake() {
     _15(ac97_bus_port EQ 0) _96; /// Kein Soundchip? Abbrechen!
-    /// 1. Den Bus Master (DMA) stoppen, falls er noch läuft
-    outb(ac97_bus_port + 0x1B, 0);
-    /// 2. Feste RAM-Adressen reservieren
-    _89 bdl_addr = 0x0A000000; /// Hier liegt die Playlist (BDL)
-    _89 pcm_addr = 0x0A001000; /// Hier liegen die rohen Töne
+
+    /// =======================================================
+    /// BARE METAL FIX 1: DIE STUMMSCHALTUNG AUFHEBEN
+    /// AC97 startet (zum Schutz der Lautsprecher) komplett stumm.
+    /// Wir müssen den Mixer wecken und die Lautstärke aufdrehen!
+    /// =======================================================
+    outw(ac97_mixer_port + 0x00, 0x0000); /// Hardware Reset des Mixers
+    _39(_192 _43 w=0; w<10000; w++) { __asm__ _192("pause"); }
+    
+    outw(ac97_mixer_port + 0x02, 0x0000); /// Master Volume: MAX (Unmute)
+    outw(ac97_mixer_port + 0x18, 0x0000); /// PCM Out Volume: MAX (Unmute)
+
+    /// =======================================================
+    /// BARE METAL FIX 2: DER DMA-HARDWARE-RESET
+    /// Wenn der "Current Index Value" (CIV) nicht exakt 0 ist,
+    /// ignoriert der Controller unser LVI=0 und wartet ewig.
+    /// =======================================================
+    outb(ac97_bus_port + 0x1B, 0x02); /// Bit 1 = Registers Reset
+    _39(_192 _43 w=0; w<10000; w++) { __asm__ _192("pause"); }
+    outb(ac97_bus_port + 0x1B, 0x00); /// Reset aufheben
+
+    /// =======================================================
+    /// BARE METAL FIX 3: DIE KORREKTE RAM-ADRESSE
+    /// Wir nutzen die sichere 32-Megabyte-Marke, falls du nur 
+    /// 64 MB oder 128 MB RAM in der VM/im Rechner hast!
+    /// =======================================================
+    _89 bdl_addr = 0x02000000; /// Hier liegt die Playlist (BDL)
+    _89 pcm_addr = 0x02001000; /// Hier liegen die rohen Töne
+    
     /// 3. Procedural Audio: Das Erdbeben berechnen!
     _182* pcm_buf = (_182*)pcm_addr;
     _39(_43 i=0; i<60000; i+=2) {
@@ -1075,21 +1100,36 @@ _50 play_ac97_earthquake() {
         pcm_buf[i]   = (_182)rumble; /// Linkes Ohr
         pcm_buf[i+1] = (_182)rumble; /// Rechtes Ohr
     }
+    
     /// 4. Die Playlist (BDL) schreiben
     _89* bdl = (_89*)bdl_addr;
     bdl[0] = pcm_addr; 
-    bdl[1] = 60000 | 0x80000000;
+    bdl[1] = 60000 | 0x80000000; /// 60000 Samples + Interrupt On Completion Flag
+    
     /// 5. Dem Controller die Playlist übergeben
     outl(ac97_bus_port + 0x10, bdl_addr);
+    
     /// 6. Last Valid Index (LVI) auf 0 setzen
     outb(ac97_bus_port + 0x15, 0);
+    
     /// 7. FEUER FREI! (DMA-Transfer starten)
-    outb(ac97_bus_port + 0x1B, 1);
+    /// Bit 0: Run/Pause (1 = Run)
+    outb(ac97_bus_port + 0x1B, 0x01);
 }
+extern "C" void play_hda_earthquake();
+
 _50 play_earthquake(_43 duration) { 
     shake_timer = duration;
-    /// 1. Neuen AC97 Sound zünden (Läuft ab jetzt unsichtbar im Hintergrund!)
-    play_ac97_earthquake();
+    
+    extern uint32_t hda_base_addr;
+    
+    /// HDA (Intel HD Audio) priorisieren, ansonsten AC97 Fallback
+    _15(hda_base_addr != 0) {
+        play_hda_earthquake();
+    } _41 {
+        play_ac97_earthquake();
+    }
+
     /// 2. Den Bildschirm wackeln lassen
     _114(shake_timer > 0) { 
         Swap();
@@ -1147,13 +1187,30 @@ _50 set_ac97_volume(_182 vol) {
     outw(ac97_mixer_port + 0x02, vol);
     current_volume = vol;
 }
-_50 play_freq(_89 f) { _15(f EQ 0) { outb(0x61, inb(0x61) & 0xFC); _96; }
-_89 d = 1193180 / f; outb(0x43, 0xB6); outb(0x42, (_184)d); outb(0x42, (_184)(d >> 8));
-_184 t = inb(0x61); _15 (t NEQ (t | 3)) outb(0x61, t | 3); }
-_50 play_sound(_89 n_freq, _43 duration) { _15(n_freq EQ 0) _96;
-_89 div = 1193180 / n_freq; outb(0x43, 0xB6); outb(0x42, (_184)(div)); outb(0x42, (_184)(div >> 8));
-_184 tmp = inb(0x61); _15(tmp NEQ (tmp | 3)) outb(0x61, tmp | 3); _39(_43 i=0; i<duration*10000; i++)
-_33 _192("nop"); outb(0x61, tmp & 0xFC); }
+extern "C" void play_hda_freq(uint32_t freq);
+
+_50 play_freq(_89 f) { 
+    extern uint32_t hda_base_addr;
+    _15(hda_base_addr != 0) { play_hda_freq(f); _96; }
+    _15(f EQ 0) { outb(0x61, inb(0x61) & 0xFC); _96; }
+    _89 d = 1193180 / f; outb(0x43, 0xB6); outb(0x42, (_184)d); outb(0x42, (_184)(d >> 8));
+    _184 t = inb(0x61); _15 (t NEQ (t | 3)) outb(0x61, t | 3); 
+}
+
+_50 play_sound(_89 n_freq, _43 duration) { 
+    _15(n_freq EQ 0) _96;
+    extern uint32_t hda_base_addr;
+    _15(hda_base_addr != 0) {
+        play_hda_freq(n_freq);
+        _39(_43 i=0; i<duration*10000; i++) _33 _192("nop");
+        play_hda_freq(0);
+        _96;
+    }
+    _89 div = 1193180 / n_freq; outb(0x43, 0xB6); outb(0x42, (_184)(div)); outb(0x42, (_184)(div >> 8));
+    _184 tmp = inb(0x61); _15(tmp NEQ (tmp | 3)) outb(0x61, tmp | 3); 
+    _39(_43 i=0; i<duration*10000; i++) _33 _192("nop"); 
+    outb(0x61, tmp & 0xFC); 
+}
 _50 startup_melody() { play_sound(523, 100); play_sound(659, 100); play_sound(784, 200); }
 _50 system_reboot() { play_earthquake(30); _114(inb(0x64)&2); outb(0x64,0xFE); }
 _50 system_shutdown() {

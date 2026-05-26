@@ -5,6 +5,31 @@
 #include "arcade.h"
 #include <stdint.h>
 #include <stddef.h>
+/// ==========================================
+/// BARE METAL FIX: EXTERNE LAUFWERKS-BRÜCKE
+/// ==========================================
+/// 1. Dem UI erklären, wie ein Laufwerk aussieht
+_202 DriveInfo { _43 type; _43 size_mb; _43 base_port; _30 model[41]; };
+
+/// 2. Die globalen Variablen aus den anderen Dateien anzapfen
+_172 DriveInfo drives[8];
+_172 _43 drive_count;
+_172 _89 usb_io_base; 
+extern uint64_t global_xhci_base_addr;
+
+/// 3. Die Laufwerks-Treiber dem UI bekannt machen
+_172 _44 ahci_read_sectors(_43 port_no, _43 lba, _43 count, _89 buffer_addr);
+_172 _44 ahci_write_sectors(_43 port_no, _43 lba, _43 count, _89 buffer_addr);
+_172 _44 usb_bot_read_sectors(_43 dev_addr, _43 ep_out, _43 ep_in, _89 lba, _43 num_sectors, _184* buffer);
+_172 _43 usb_bot_get_capacity(_43 dev_addr, _43 ep_out, _43 ep_in);
+_172 _44 usb_enumerate_device(_43 port_idx, _43 new_address);
+
+/// 4. I/O Befehl für den USB-Scanner im UI
+static inline _182 inw(_182 port) {
+    _182 ret;
+    __asm__ volatile ( "inw %1, %0" : "=a"(ret) : "Nd"(port) );
+    return ret;
+}
 // --- GLOBALE BILDSCHIRM-VARIABLEN ---
 uint32_t screen_w = 800;
 uint32_t screen_h = 600;
@@ -36,6 +61,9 @@ uint32_t os2_pci_read(uint32_t bus, uint32_t slot, uint32_t func, uint32_t offse
     return ret;
 }
 
+extern void map_mmio_64(uint64_t phys_addr);
+extern void intel_e1000_init(uint32_t mmio_addr);
+
 void os2_smart_scan() {
     for (uint32_t bus = 0; bus < 256; bus++) {
         for (uint32_t slot = 0; slot < 32; slot++) {
@@ -49,6 +77,13 @@ void os2_smart_scan() {
                     os2_net_vendor = vendor_device & 0xFFFF;
                     os2_net_device = vendor_device >> 16;
                     os2_net_bar0 = os2_pci_read(bus, slot, 0, 0x10) & 0xFFFFFFF0;
+                    
+                    if (os2_net_bar0 != 0) {
+                        map_mmio_64(os2_net_bar0);
+                        if (os2_net_vendor == 0x8086 && os2_net_device == 0x100E) {
+                            intel_e1000_init(os2_net_bar0);
+                        }
+                    }
                     return; /// Stoppt beim ersten Netzwerkchip
                 }
             }
@@ -303,16 +338,124 @@ extern int selected_drive_idx;
 extern int ahci_read_sectors(uint32_t lba, uint64_t dest_ram); 
 extern _44 xhci_bot_read_sectors(_184 slot_id, uint32_t lba, uint64_t dest_ram);
 
-_44 disk_read_auto(uint32_t lba, uint64_t dest_ram) {
-    _39(int i=0; i<512; i++) {
-        ((char*)dest_ram)[i] = 0;
+/// ==========================================
+/// BARE METAL FIX: DER UNIVERSELLE DISK-ROUTER
+/// ==========================================
+bool disk_read_auto(uint32_t lba, uint64_t target_ram_addr) {
+    _15(selected_drive_idx EQ -1) _96 _86;
+    
+    _43 type = drives[selected_drive_idx].type;
+    _43 port = drives[selected_drive_idx].base_port;
+    
+    /// FALL 1: SATA / AHCI FESTPLATTE
+    _15(type EQ 2) {
+        /// HIER rufen wir den echten AHCI-Treiber mit 4 Argumenten auf!
+        _96 ahci_read_sectors(port, lba, 1, target_ram_addr);
     }
+    
+    /// FALL 2: USB MASS STORAGE (Typ 3)
+    _15(type EQ 3) {
+        /// Wir zwingen den target_ram_addr (uint64_t) via Casting auf (uint8_t*)
+        _96 usb_bot_read_sectors(port, 1, 0x82, lba, 1, (uint8_t*)target_ram_addr);
+    }
+    
+    _96 _86;
+}
 
-    _15(selected_drive_idx == 99) {
-        _96 xhci_bot_read_sectors(1, lba, dest_ram);
-    } _41 {
-        _96 ahci_read_sectors(lba, dest_ram);
+/// ==========================================
+/// BARE METAL FIX: DER UNIVERSELLE WRITE-ROUTER
+/// ==========================================
+bool disk_write_auto(uint32_t lba, uint64_t source_ram_addr) {
+    _15(selected_drive_idx EQ -1) _96 _86;
+    _43 type = drives[selected_drive_idx].type;
+    _43 port = drives[selected_drive_idx].base_port;
+    
+    _15(type EQ 2) {
+        /// SATA schreiben!
+        _96 ahci_write_sectors(port, lba, 1, source_ram_addr);
     }
+    /// (Für USB Type 3 fügen wir das später hinzu, falls du auf den Stick speichern willst)
+    _96 _86;
+}
+
+/// ==========================================
+/// BARE METAL FIX: PCI SCANNER FÜR USB (UHCI)
+/// ==========================================
+static inline void outl(uint16_t port, uint32_t val) { __asm__ volatile ( "outl %0, %1" : : "a"(val), "Nd"(port) ); }
+static inline uint32_t inl(uint16_t port) { uint32_t ret; __asm__ volatile ( "inl %1, %0" : "=a"(ret) : "Nd"(port) ); return ret; }
+static inline void outw(uint16_t port, uint16_t val) { __asm__ volatile ( "outw %0, %1" : : "a"(val), "Nd"(port) ); }
+
+/// ==========================================
+/// BARE METAL FIX: SMART xHCI (USB 3.0) SCANNER
+/// ==========================================
+extern int init_xhci_probe(uint32_t bar0, int id); 
+
+void find_and_init_usb() {
+    extern char cmd_status[256]; 
+    extern void str_cpy(char* d, const char* s);
+    usb_io_base = 0; // Reset
+
+    _39(uint32_t bus = 0; bus < 256; bus++) { 
+        _39(uint32_t slot = 0; slot < 32; slot++) {
+            _39(uint32_t func = 0; func < 8; func++) {
+                uint32_t vendor_device = pci_read(bus, slot, func, 0);
+                
+                _15((vendor_device & 0xFFFF) != 0xFFFF) {
+                    uint32_t class_info = pci_read(bus, slot, func, 0x08);
+                    uint8_t class_code = (class_info >> 24) & 0xFF;
+                    uint8_t subclass   = (class_info >> 16) & 0xFF;
+                    uint8_t prog_if    = (class_info >>  8) & 0xFF;
+                    
+                    _15(class_code == 0x0C && subclass == 0x03) {
+                        
+                        /// xHCI (USB 3.0) - MMIO, handled separately by init_xhci_probe
+                        _15(prog_if == 0x30) {
+                            uint32_t bar0 = pci_read(bus, slot, func, 0x10);
+                            uint32_t mmio_base = bar0 & 0xFFFFFFF0;
+                            /// Do NOT set usb_io_base here - xHCI uses MMIO, not port I/O
+                            str_cpy(cmd_status, "xHCI (USB 3.0) FOUND!");
+                            init_xhci_probe(mmio_base, 1);
+                            /// Keep scanning for UHCI too
+                        }
+                        /// UHCI (USB 1.1) - Port I/O via BAR4
+                        _41 _15(prog_if == 0x00) {
+                            /// Enable Bus Mastering + I/O space
+                            uint32_t pci_cmd_addr = 0x80000000 | (bus << 16) | (slot << 11) | (func << 8) | 0x04;
+                            outl(0xCF8, pci_cmd_addr);
+                            uint32_t pci_cmd = inl(0xCFC);
+                            outl(0xCF8, pci_cmd_addr);
+                            outl(0xCFC, pci_cmd | 0x05); /// I/O enable + Bus Master
+                            
+                            /// BAR4 is the I/O base for UHCI
+                            uint32_t bar4 = pci_read(bus, slot, func, 0x20);
+                            _15(bar4 & 0x01) { /// Bit 0 = 1 means I/O space BAR
+                                usb_io_base = bar4 & 0xFFFC; /// Mask off the I/O indicator bits
+                                str_cpy(cmd_status, "UHCI (USB 1.1) FOUND!");
+                            }
+                        }
+                        /// EHCI (USB 2.0)
+                        _41 _15(prog_if == 0x20) {
+                            str_cpy(cmd_status, "EHCI (USB 2.0) FOUND (not handled)");
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Der Retter-Wrapper für alte Speicher-Befehle im CFS:
+int ahci_write_sectors(uint32_t lba, uint64_t buffer_addr) {
+    return disk_write_auto(lba, buffer_addr);
+}
+
+/// ==========================================
+/// BARE METAL FIX: DER RETTER-WRAPPER (C++ OVERLOADING)
+/// ==========================================
+/// Fängt alle alten Aufrufe aus main() und process_cmd() ab
+/// und leitet sie vollautomatisch an den neuen Router weiter!
+int ahci_read_sectors(uint32_t lba, uint64_t buffer_addr) {
+    return disk_read_auto(lba, buffer_addr);
 }
 /// ==========================================
 /// BARE METAL FIX: DER UNIVERSAL-SCHREIB-ADAPTER
@@ -320,18 +463,13 @@ _44 disk_read_auto(uint32_t lba, uint64_t dest_ram) {
 extern int ahci_write_sectors(uint32_t lba, uint64_t src_ram); 
 extern _44 xhci_bot_write_sectors(_184 slot_id, uint32_t lba, uint64_t src_ram);
 
-_44 disk_write_auto(uint32_t lba, uint64_t src_ram) {
-    _15(selected_drive_idx == 99) {
-        _96 xhci_bot_write_sectors(1, lba, src_ram);
-    } _41 {
-        _96 ahci_write_sectors(lba, src_ram);
-    }
-}
 /// BARE METAL FIX: Den RAM für Texte restlos reinigen!
 void mem_set(void* ptr, uint8_t value, uint32_t num) {
     uint8_t* p = (uint8_t*)ptr;
     while (num--) *p++ = value;
 }
+extern "C" _50 ahci_mount_drive();
+extern "C" _50 usb_scan_and_mount();
 /// ==========================================
 /// 1. HEAP ALLOCATOR (64-BIT GEFIXT)
 /// ==========================================
@@ -349,9 +487,6 @@ void operator delete(void* ptr, size_t size) noexcept { free(ptr); }
 /// ==========================================
 inline uint8_t inb(uint16_t port) { uint8_t ret; asm volatile("inb %1, %0" : "=a"(ret) : "Nd"(port)); return ret; }
 inline void outb(uint16_t port, uint8_t val) { asm volatile("outb %0, %1" : : "a"(val), "Nd"(port)); }
-inline uint32_t inl(uint16_t port) { uint32_t ret; asm volatile("inl %1, %0" : "=a"(ret) : "Nd"(port)); return ret; }
-inline void outl(uint16_t port, uint32_t val) { asm volatile("outl %0, %1" : : "a"(val), "Nd"(port)); }
-inline void outw(uint16_t port, uint16_t val) { asm volatile("outw %0, %1" : : "a"(val), "Nd"(port)); }
 _50 mouse_wait(_184 type) { _89 t = 100000; _114(t--) { _15(type EQ 0 AND (inb(0x64)&1)) _96; _15(type EQ 1 AND !(inb(0x64)&2)) _96; } }
 _50 mouse_write(_184 w) { mouse_wait(1); outb(0x64, 0xD4); mouse_wait(1); outb(0x60, w); }
 _184 mouse_read() { mouse_wait(0); _96 inb(0x60); }
@@ -379,7 +514,7 @@ int mouse_sub_x = 40000;
 int mouse_sub_y = 30000;
 /// Deine einstellbare Sensitivität! 
 /// 10 = 1.0 (Normal) | 50 = 5 (Halb) | 100 = 10 (Extrem langsam)
-int mouse_sens = 75; /// <-- Versuch es mal mit 30 (0.3) für die Diva!
+int mouse_sens = 120; /// <-- Versuch es mal mit 30 (0.3) für die Diva!
 /// ==========================================
 /// BARE METAL FIX: DIE USB-MAUS SCHNITTSTELLE
 /// ==========================================
@@ -662,9 +797,8 @@ int ahci_rw(uint32_t lba, uint64_t buffer_addr, int is_write) {
     if(port->tfd & 0x01) return 0;
     return 1;
 }
+
 /// Namen auf Sectors (Mehrzahl) geändert
-int ahci_read_sectors(uint32_t lba, uint64_t buffer_addr) { return ahci_rw(lba, buffer_addr, 0); }
-int ahci_write_sectors(uint32_t lba, uint64_t buffer_addr) { return ahci_rw(lba, buffer_addr, 1); }
 int ahci_identify(uint32_t buffer_addr) {
     if(active_ahci_bar5 == 0) return 0;
     HBA_PORT* port = &((HBA_MEM*)active_ahci_bar5)->ports[active_sata_port];
@@ -1488,13 +1622,35 @@ _50 focus_window(_43 id);
 extern char cpu_brand[49];
 void system_reboot();
 extern void system_init_usb();
-extern _43 xhci_bot_get_capacity(_184 slot_id); /// BARE METAL FIX: Das Orakel-Radar für SCSI anmelden!
+extern "C" uint32_t xhci_bot_get_capacity(uint8_t slot_id);
 _50 toggle_app(_43 id) {
     Window* win = &windows[id];
     _15(win->open AND !win->minimized AND win_z[12] EQ win->id) { win->minimized = _128; } 
     _41 { win->open = _128; win->minimized = _86; focus_window(win->id); }
 }
 extern _44 key_new;
+/// ==========================================
+/// BARE METAL FIX: DER UNIVERSELLE DISK-ROUTER
+/// ==========================================
+extern "C" _44 disk_read_auto(_89 lba, _89 target_ram_addr) {
+    _15(selected_drive_idx EQ -1) _96 _86;
+    
+    _43 type = drives[selected_drive_idx].type;
+    _43 port = drives[selected_drive_idx].base_port;
+    
+    /// FALL 1: SATA / AHCI FESTPLATTE (Typ 2)
+    _15(type EQ 2) {
+        _96 ahci_read_sectors(port, lba, 1, target_ram_addr);
+    }
+    
+    /// FALL 2: USB MASS STORAGE (Typ 3)
+    _15(type EQ 3) {
+        /// Standard Endpoints für USB-Sticks (EP 1 Out, EP 0x82 In)
+        _96 usb_bot_read_sectors(port, 1, 0x82, lba, 1, (_184*)target_ram_addr);
+    }
+    
+    _96 _86;
+}
 /// ==========================================
 /// BARE METAL FIX: SYSTEM CALL DISPATCHER (Wiederhergestellt!)
 /// ==========================================
@@ -1565,6 +1721,11 @@ void pci_scan_all() {
                     /// Hier auch nochmal explizit (uint32_t) angeben
                     uint32_t bar0 = pci_read(bus, slot, (uint32_t)0, (uint32_t)0x10);
                     e1000_mmio_base = bar0 & 0xFFFFFFF0; 
+                    
+                    if (e1000_mmio_base != 0) {
+                        map_mmio_64(e1000_mmio_base);
+                        intel_e1000_init(e1000_mmio_base);
+                    }
                     return; 
                 }
             }
@@ -1725,8 +1886,13 @@ void process_cmd(char* input, Window* cmd_win) {
 
             if (os2_net_vendor == 0x8086 && os2_net_device == 0x100E) {
                 print_win(cmd_win, "TYPE : INTEL E1000 (LEGACY)\n");
-                /// BARE METAL SICHERHEIT: Der direkte RAM-Zugriff auf 0x5400 ist vorerst deaktiviert!
-                print_win(cmd_win, "MAC  : READING DISABLED (TRIPLE FAULT PREVENTION)\n");
+                
+                char real_mac[20];
+                read_mac_address(real_mac);
+                
+                print_win(cmd_win, "MAC  : ");
+                print_win(cmd_win, real_mac);
+                print_win(cmd_win, "\n");
             } 
             else if (os2_net_vendor == 0x10EC) {
                 print_win(cmd_win, "TYPE : REALTEK CHIPSET\n");
@@ -1751,14 +1917,13 @@ void process_cmd(char* input, Window* cmd_win) {
         }
     }
     /// ==========================================
-    /// IP BEFEHL (ENTSCHÄRFT!)
+    /// IP BEFEHL (AKTIVIERT!)
     /// ==========================================
     else if(str_equal(input, "IP")) {
         print_win(cmd_win, "INTERFACE : ETH0\n");
-        /// BARE METAL SICHERHEIT: Alle Zugriffe auf externe OS1-Variablen deaktiviert!
-        print_win(cmd_win, "IPv4 ADDR : OFFLINE (TRIPLE FAULT PREVENTION)\n");
-        print_win(cmd_win, "SUBNET    : OFFLINE\n");
-        print_win(cmd_win, "GATEWAY   : OFFLINE\n");
+        print_win(cmd_win, "IPv4 ADDR : "); print_win(cmd_win, ip_address); print_win(cmd_win, "\n");
+        print_win(cmd_win, "SUBNET    : "); print_win(cmd_win, net_mask); print_win(cmd_win, "\n");
+        print_win(cmd_win, "GATEWAY   : "); print_win(cmd_win, gateway_ip); print_win(cmd_win, "\n");
         print_win(cmd_win, "DNS       : 8.8.8.8\n");
     }
     /// ==========================================
@@ -2612,7 +2777,40 @@ extern "C" void main(BootInfo* boot_info) {
                 _15(sys_lang EQ 0) str_cpy(lang_lbl, "[ LANG: EN ]"); _41 str_cpy(lang_lbl, "[ SPR: DE ]");
                 _15(sys_lang EQ 0) { _15(sys_theme EQ 0) str_cpy(theme_lbl, "[ THEME: COMPUTER ]"); _41 str_cpy(theme_lbl, "[ THEME: GENESIS ]"); } 
                 _41 { _15(sys_theme EQ 0) str_cpy(theme_lbl, "[ THEMA: COMPUTER ]"); _41 str_cpy(theme_lbl, "[ THEMA: GENESIS ]"); }
+                /// 2. MOUSE SENSITIVITY SLIDER (System: Klick-zum-Setzen)
+                _43 slider_x = wx + 20;
+                _43 slider_y = wy + 140; // Unter dem Trennstrich
+                _43 slider_w = 150;
                 
+                // Hintergrund-Schiene
+                DrawRoundedRect(slider_x, slider_y, slider_w, 8, 4, 0x444444);
+                
+                // Knob-Position (Berechnung basierend auf mouse_sens)
+                // Range: 10 bis 300
+                _43 knob_x = slider_x + ((mouse_sens - 10) * slider_w / 290);
+                DrawRoundedRect(knob_x - 5, slider_y - 2, 10, 12, 4, 0xFFFFFF);
+                
+                // Label & Wert-Anzeige
+                Text(wx + 180, slider_y - 2, "SENS:", 0xAAAAAA, _128);
+                // Hier müsstest du ggf. noch einen Int-to-String Konverter nutzen, 
+                // falls du die Zahl anzeigen willst.
+
+                // Interaction: Klick-Abfrage für den Slider
+                _44 mouse_klick_slider = (mouse_just_pressed AND is_active AND is_over_rect(mouse_x, mouse_y, slider_x, slider_y, slider_w, 20));
+                
+                _15(input_cooldown EQ 0 AND mouse_klick_slider) {
+                    // Berechnung: Maus-X relativ zum Slider-Anfang
+                    _43 rel_x = mouse_x - slider_x;
+                    
+                    // Umrechnung auf den Bereich 10 - 300
+                    mouse_sens = (rel_x * 290 / slider_w) + 10;
+                    
+                    // Bounds Check
+                    _15(mouse_sens < 10) mouse_sens = 10;
+                    _15(mouse_sens > 300) mouse_sens = 300;
+                    
+                    input_cooldown = 10; // Kurzer Cooldown gegen "Flackern"
+                }
                 _15(input_cooldown EQ 0 AND mouse_just_pressed AND is_active AND is_over_rect(mouse_x, mouse_y, wx+5, btn_y, 140, 20)) { sys_lang = !sys_lang; input_cooldown = 25; }
                 Text(wx+10, btn_y+4, lang_lbl, 0x000000, _128);
                 
@@ -2793,8 +2991,29 @@ extern "C" void main(BootInfo* boot_info) {
             /// DISK MANAGER (FENSTER ID 4) - ULTIMATE HDD FIX + LOG VIEW
             /// ==========================================
             _15(win->id EQ 4) {
+
+                /// ONE-SHOT SCANNER: runs exactly once when Disk Manager opens
+                static _44 drives_scanned = _86;
+                _15(!drives_scanned) {
+                    drives_scanned = _128; /// Set flag FIRST to prevent re-entry
+                    drive_count = 0;
+                    /// 1. SATA drives
+                    ahci_mount_drive();
+                    _39(_43 i = 0; i < detected_port_count; i++) {
+                        _15(drive_count < 8) {
+                            drives[drive_count].type = 2;
+                            drives[drive_count].base_port = detected_ports[i];
+                            str_cpy(drives[drive_count].model, "SATA HARDDISK");
+                            drive_count++;
+                        }
+                    }
+                    /// 2. USB drives
+                    find_and_init_usb();
+                    usb_scan_and_mount();
+                }
+
                 _44 is_active = (win_z[12] EQ win->id);
-                _89 txt_color = (win->color > 0x888888) ? 0x000000 : 0xFFFFFF;
+                txt_color = (win->color > 0x888888) ? 0x000000 : 0xFFFFFF;
                 uint32_t buf_mbr = 0x00900000;
                 uint32_t buf_dir = 0x00901000;
 				static _44 is_ntfs_drive = _86;
@@ -3128,28 +3347,42 @@ extern "C" void main(BootInfo* boot_info) {
                         }
                     }
                 } _41 {
-                    /// ------------------------------------------
-                    /// VIEW 1: HAUPTMENÜ
-                    /// ------------------------------------------
-                    _43 list_y = wy + 60;
-                    Text(wx+15, list_y - 15, "AVAILABLE DRIVES:", 0xAAAAAA, _128);
-                    _39(_43 i=0; i < detected_port_count; i++) {
-                        _43 port_num = detected_ports[i];
-                        _44 is_sel = (selected_drive_idx == i);
-                        DrawRoundedRect(wx+15, list_y, 120, 25, 4, is_sel ? 0x0088FF : 0x333333);
-                        _30 d_n[] = "PORT 0"; d_n[5] = '0' + port_num; Text(wx+25, list_y+5, d_n, 0xFFFFFF, _128);
-                        
-                        _15(input_cooldown EQ 0 AND mouse_just_pressed AND is_active AND is_over_rect(mouse_x, mouse_y, wx+15, list_y, 120, 25)) {
-                            selected_drive_idx = i; active_sata_port = port_num; is_mounted = false; 
-                            HBA_MEM* hba = (HBA_MEM*)active_ahci_bar5; ahci_init_port(&hba->ports[port_num], port_num);
-                            input_cooldown = 15;
-                        }
-                        list_y += 30;
-                    }
-                    
-                    _89 btn_col = (selected_drive_idx == -1) ? 0x444444 : 0x00AA00;
-                    DrawRoundedRect(wx+150, wy+60, 80, 25, 4, btn_col); TextC(wx+190, wy+68, "OPEN", 0xFFFFFF, _128);
-                    DrawRoundedRect(wx+240, wy+60, 80, 25, 4, (selected_drive_idx == -1) ? 0x444444 : 0xAA0000); TextC(wx+280, wy+68, "FORMAT", 0xFFFFFF, _128);
+	                /// VIEW 1 scanner is handled by usb_scan_and_mount() called once from the outer block.
+					// 2. ZEICHNEN (Läuft jeden Frame - KEIN if(!dsk_mgr_opened) hier!)
+					_43 list_y = wy + 60;
+					Text(wx+15, list_y - 15, "AVAILABLE DRIVES:", 0xAAAAAA, _128);
+				
+					_39(_43 i=0; i < drive_count; i++) {
+						_44 is_sel = (selected_drive_idx == i);
+						DrawRoundedRect(wx+15, list_y, 160, 25, 4, is_sel ? 0x0088FF : 0x333333);
+						Text(wx+25, list_y+5, drives[i].model, 0xFFFFFF, _128);
+						
+						_15(input_cooldown EQ 0 AND mouse_just_pressed AND is_active AND is_over_rect(mouse_x, mouse_y, wx+15, list_y, 160, 25)) {
+							selected_drive_idx = i; 
+							is_mounted = false; 
+							input_cooldown = 15;
+						}
+						list_y += 30;
+					}
+				
+					// 3. UI ELEMENTE (Buttons & Status)
+					_89 btn_col = (selected_drive_idx == -1) ? 0x444444 : 0x00AA00;
+					DrawRoundedRect(wx+150, wy+60, 80, 25, 4, btn_col); 
+					TextC(wx+190, wy+68, "OPEN", 0xFFFFFF, _128);
+					
+					DrawRoundedRect(wx+240, wy+60, 80, 25, 4, (selected_drive_idx == -1) ? 0x444444 : 0xAA0000); 
+					TextC(wx+280, wy+68, "FORMAT", 0xFFFFFF, _128);
+					
+					char diag[64];
+					str_cpy(diag, "USB IO BASE: 0x");
+					hex_to_str(usb_io_base, diag + 15);
+					Text(wx+15, wy+220, diag, 0xAAAAAA, _86);
+					
+					char diag2[64];
+					str_cpy(diag2, "xHCI BASE: 0x");
+					hex_to_str((uint32_t)global_xhci_base_addr, diag2 + 13);
+					Text(wx+15, wy+235, diag2, 0xAAAAAA, _86);
+					Text(wx+15, wy+250, cmd_status, 0xFF8800, _86);
                     
                     /// FORMATIEREN
                     _15(selected_drive_idx != -1 AND input_cooldown EQ 0 AND mouse_just_pressed AND is_active AND is_over_rect(mouse_x, mouse_y, wx+240, wy+60, 80, 25)) {
@@ -3174,28 +3407,36 @@ extern "C" void main(BootInfo* boot_info) {
                     /// ==========================================
                     _15(selected_drive_idx != -1 AND input_cooldown EQ 0 AND mouse_just_pressed AND is_active AND is_over_rect(mouse_x, mouse_y, wx+150, wy+60, 80, 25)) {
                         win->cursor_pos = 0;
-                        active_sata_port = detected_ports[selected_drive_idx];
                         
-                        ahci_identify((uint32_t)buf_mbr);
-                        uint32_t lba_low = *(uint32_t*)(buf_mbr + 200);
-                        drive_total_gb = lba_low / 2097152; _15(drive_total_gb == 0) drive_total_gb = 1; 
+                        _43 drive_type = drives[selected_drive_idx].type;
+                        
+                        /// BARE METAL FIX: Kapazität je nach Typ auslesen!
+                        _15(drive_type == 2) {
+                            active_sata_port = drives[selected_drive_idx].base_port;
+                            ahci_identify((uint32_t)buf_mbr);
+                            uint32_t lba_low = *(uint32_t*)(buf_mbr + 200);
+                            drive_total_gb = lba_low / 2097152; _15(drive_total_gb == 0) drive_total_gb = 1; 
+                        } _41 {
+                            drive_total_gb = drives[selected_drive_idx].size_mb / 1024;
+                            _15(drive_total_gb == 0) drive_total_gb = 1; 
+                        }
                         
                         _39(int i=0; i<512; i++) ((char*)buf_mbr)[i] = 0;
-                        ahci_read_sectors(0, (uint64_t)buf_mbr);
+                        
+                        /// UNIVERSAL READ!
+                        disk_read_auto(0, (uint64_t)buf_mbr);
                         _39(_192 _43 wait = 0; wait < 1000000; wait++) __asm__ _192("pause");
                         
                         uint8_t* boot = (uint8_t*)buf_mbr;
-                        
                         _39(int i=0; i<28; i++) { cfs_files[i].exists = 0; cfs_files[i].parent_idx = 255; cfs_files[i].is_folder = 0; }
                         is_mounted = true; drive_used_kb = 0;
 
                         /// FALL 1: NATIVES CFS DATEISYSTEM
                         _15(boot[3] == 'C' && boot[4] == 'F' && boot[5] == 'S') {
-                            
-                            is_ntfs_drive = _86; /// BARE METAL FIX: Schaltet den NTFS Scraper ab!
-                            
+                            is_ntfs_drive = _86; 
                             _39(int i=0; i<512; i++) ((char*)buf_dir)[i] = 0;
-                            ahci_read_sectors(1002, (uint64_t)buf_dir);
+                            
+                            disk_read_auto(1002, (uint64_t)buf_dir); /// UNIVERSAL READ!
                             _39(_192 _43 wait2 = 0; wait2 < 1000000; wait2++) __asm__ _192("pause");
                             
                             CFS_DIR_ENTRY* dir = (CFS_DIR_ENTRY*)buf_dir;
@@ -3227,15 +3468,16 @@ extern "C" void main(BootInfo* boot_info) {
                             _15(boot[510] == 0x55 && boot[511] == 0xAA) {
                                 _15(part_type == 0xEE) {
                                     print_win(win, "\n[OK] GPT DRIVE DETECTED.\n");
-                                    ahci_read_sectors(1, (uint64_t)buf_dir);
+                                    disk_read_auto(1, (uint64_t)buf_dir); /// UNIVERSAL READ!
                                     _39(_192 _43 w = 0; w < 500000; w++) __asm__ _192("pause"); 
                                     uint64_t table_lba = *(uint64_t*)(buf_dir + 72);
-                                    ahci_read_sectors(table_lba, (uint64_t)buf_dir);
+                                    
+                                    disk_read_auto(table_lba, (uint64_t)buf_dir); /// UNIVERSAL READ!
                                     _39(_192 _43 w2 = 0; w2 < 500000; w2++) __asm__ _192("pause"); 
                                     _39(int p=0; p<4; p++) {
                                         uint64_t slba = *(uint64_t*)(buf_dir + (p * 128) + 32);
                                         _15(slba > 0) {
-                                            ahci_read_sectors(slba, (uint64_t)buf_mbr);
+                                            disk_read_auto(slba, (uint64_t)buf_mbr); /// UNIVERSAL READ!
                                             _39(_192 _43 w3 = 0; w3 < 200000; w3++) __asm__ _192("pause"); 
                                             if (((uint8_t*)buf_mbr)[3]=='N' && ((uint8_t*)buf_mbr)[4]=='T') { target_ntfs_lba = slba; _37; }
                                         }
@@ -3249,23 +3491,24 @@ extern "C" void main(BootInfo* boot_info) {
                                 print_win(win, "\n[OK] NTFS VOLUME FOUND!\n");
                                 is_ntfs_drive = _128;
                                 
-                                ahci_read_sectors(target_ntfs_lba, (uint64_t)buf_dir);
+                                disk_read_auto(target_ntfs_lba, (uint64_t)buf_dir); /// UNIVERSAL READ!
                                 _39(_192 _43 w = 0; w < 500000; w++) __asm__ _192("pause"); 
                                 uint8_t* vbr = (uint8_t*)buf_dir;
                                 _43 sec_per_cluster = vbr[13];
                                 uint64_t mft_cluster = *(uint64_t*)&vbr[48];
                                 uint64_t mft_lba = target_ntfs_lba + (mft_cluster * sec_per_cluster);
                                 
-                                /// BARE METAL FIX: 0x0A000000 (160 MB) rettet den Heap vor Triple Fault!
                                 uint8_t* mft_cache = (uint8_t*)0x0A000000; 
                                 print_win(win, "[SYS] CACHING 50,000 MFT RECORDS...\n");
                                 
                                 _39(int rec = 0; rec < 50000; rec++) {
                                     uint64_t record_lba = mft_lba + (rec * 2);
                                     uint64_t ram_target = (uint64_t)(mft_cache + (rec * 1024));
-                                    ahci_read_sectors(record_lba, ram_target);
+                                    
+                                    disk_read_auto(record_lba, ram_target); /// UNIVERSAL READ!
                                     _39(_192 _43 w1 = 0; w1 < 2000; w1++) __asm__ _192("pause");
-                                    ahci_read_sectors(record_lba + 1, ram_target + 512); 
+                                    
+                                    disk_read_auto(record_lba + 1, ram_target + 512); /// UNIVERSAL READ!
                                     _39(_192 _43 w2 = 0; w2 < 2000; w2++) __asm__ _192("pause");
                                 }
                                 print_win(win, "[OK] CACHE READY! RAM SPEED UNLOCKED.\n");
@@ -3277,8 +3520,8 @@ extern "C" void main(BootInfo* boot_info) {
                         dsk_mgr_opened = _128;   
                         input_cooldown = 15;
                     }
-                }
-            }
+				}
+			}
 			/// ==========================================
             /// NOTEPAD (ID 0) - BARE METAL FIX (SICHTBAR!)
             /// ==========================================

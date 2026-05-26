@@ -412,7 +412,7 @@ _50 pci_write(_184 bus, _184 slot, _184 func, _184 offset, _89 value) {
 inline unsigned char mmio_read8(_89 address) {
     return *((volatile unsigned char*)address);
 }
-_50 xhci_check_ports(_89 op_base, _43 max_ports) {
+_184 xhci_check_ports(_89 op_base, _43 max_ports) {
     /// 1. DIE GEDENKSEKUNDE: Wir warten, bis der Stick gebootet hat
     _39(_43 wait = 0; wait < 20000000; wait++) { asm volatile("nop"); }
 
@@ -437,17 +437,18 @@ _50 xhci_check_ports(_89 op_base, _43 max_ports) {
             }
             
             found = _128;
-            _96; /// Wir haben ihn, Abbruch!
+            _96 slot_id; /// Wir haben ihn, Abbruch!
         }
 	}
     
     _15(!found) {
         str_cpy(hw_usb, "NO DEVICE PLUGGED");
     }
+    _96 0;
 }
 
 _184 xhci_send_enable_slot() {
-    volatile XHCI_TRB* ring = (volatile XHCI_TRB*)0x04010000;
+    volatile XHCI_TRB* ring = (volatile XHCI_TRB*)0x08010000 ;
     ring[xhci_cmd_idx].param1 = 0;
     ring[xhci_cmd_idx].param2 = 0;
     ring[xhci_cmd_idx].status = 0;
@@ -651,7 +652,7 @@ _50 xhci_configure_endpoints(_184 slot_id, _89 speed) {
 /// ==========================================
 /// 1. KAPAZITÄT LESEN (TOR 4)
 /// ==========================================
-_43 xhci_bot_get_capacity(_184 slot_id) {
+extern "C" _43 xhci_bot_get_capacity(_184 slot_id) { // <--- HIER EINGEFÜGT!
     _89* cbw_ram = (_89*)0x040B0000;
     _39(_43 i=0; i<28; i++) cbw_ram[i] = 0;
     
@@ -846,6 +847,8 @@ void system_init_usb() {
     /// Das BIOS denkt, wir haben keinen Treiber, und emuliert 
     /// die USB-Geräte munter als PS/2-Geräte weiter.
 }
+extern "C" void hda_init_controller(uint32_t hda_base);
+
 _50 pci_scan_all() {
     /// 1. ALLE Zähler sauber resetten, damit Arrays niemals überlaufen!
     nic_count = 0;
@@ -1001,12 +1004,27 @@ _50 pci_scan_all() {
                         }
                     }
 
-                    /// 8. SOUNDKARTE
+                    /// 8. SOUNDKARTE (AC97)
                     _15(cls EQ 0x04 AND sub EQ 0x01) {
                         ac97_mixer_port = (_182)(pci_read(bus, dev, func, 0x10) & 0xFFFFFFFE);
                         ac97_bus_port = (_182)(pci_read(bus, dev, func, 0x14) & 0xFFFFFFFE);
                         _89 cmd_reg = pci_read(bus, dev, func, 0x04);
                         pci_write(bus, dev, func, 0x04, cmd_reg | 0x05);
+                    }
+
+                    /// 8.1 INTEL HD AUDIO (HDA)
+                    _15(cls EQ 0x04 AND sub EQ 0x03) {
+                        extern uint32_t hda_base_addr;
+                        /// BAR0 ist bei HDA immer MMIO (Speicher)
+                        hda_base_addr = pci_read(bus, dev, func, 0x10) & 0xFFFFFFF0;
+                        _89 cmd_reg = pci_read(bus, dev, func, 0x04);
+                        /// Bus Mastering (Bit 2) und Memory Space (Bit 1) aktivieren!
+                        pci_write(bus, dev, func, 0x04, cmd_reg | 0x06);
+                        
+                        /// HDA Initialisierung aufrufen
+                        _15(hda_base_addr != 0) {
+                            hda_init_controller(hda_base_addr);
+                        }
                     }
 
                     /// 9. WEBCAM

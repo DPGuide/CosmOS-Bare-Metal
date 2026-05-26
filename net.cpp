@@ -17,7 +17,6 @@
 	__attribute__((aligned(4096))) _184 e1000_rx_buffers[32][4096];
 	__attribute__((aligned(4096))) _184 e1000_tx_buffers[32][4096];
 #endif
-
 _184 global_dhcp_buf[300];
 _184 global_udp_buf[1500];
 _184 global_ip_buf[1514];
@@ -61,7 +60,8 @@ _172 _30 mac_str[24];
 _172 _43 tx_cur;
 _172 _43 rx_idx_rtl;
 extern void str_cat(char* dest, const char* src);
-_172 _30 cmd_status[32];
+
+extern char cmd_status[256];
 _30 net_mask[32] = "255.255.255.0";
 _30 gateway_ip[32] = "0.0.0.0";
 _172 _30 cmd_last_out[128];
@@ -360,6 +360,48 @@ _50 send_udp_raw(_89 ip, _182 p_src, _182 p_dst, _184* payload, _182 payload_len
     _39(_43 k = 0; k < payload_len; k++) {
         pl[8 + k] = payload[k]; 
     }
+
+    /// =======================================================
+    /// BARE METAL FIX: UDP CHECKSUMME (FritzBox Zicke Teil 2)
+    /// Router droppen oft Pakete mit Checksumme 0x0000!
+    /// =======================================================
+    _89 sum = 0;
+    
+    /// 1. Pseudo-Header: IPs
+    _15(ip EQ 0xFFFFFFFF) {
+        /// Broadcast: Source IP ist 0.0.0.0, Dest IP ist 255.255.255.255
+        sum += 0xFFFF; 
+        sum += 0xFFFF;
+    } _41 {
+        /// Fallback (Spiegelt net_ip wider)
+        sum += 0x0A00; 
+        sum += 0x020F;
+        sum += (ip >> 16) & 0xFFFF; 
+        sum += ip & 0xFFFF;         
+    }
+    
+    /// 2. Pseudo-Header: Protocol (17) und UDP-Länge
+    sum += 17; 
+    sum += (8 + payload_len); 
+    
+    /// 3. UDP Header & Payload summieren
+    _43 total_udp_len = 8 + payload_len;
+    _184* udp_bytes = (_184*)pl;
+    _39(_43 j = 0; j < total_udp_len; j += 2) {
+        _182 word = (udp_bytes[j] << 8);
+        _15(j + 1 < total_udp_len) word |= udp_bytes[j + 1];
+        sum += word;
+    }
+    
+    /// 4. Overflow falten & schreiben
+    _114(sum >> 16) {
+        sum = (sum & 0xFFFF) + (sum >> 16);
+    }
+    _182 final_sum = ~sum;
+    _15(final_sum EQ 0) final_sum = 0xFFFF; /// UDP Checksumme 0 wird als 0xFFFF gesendet
+    
+    u->chk = ((final_sum >> 8) & 0xFF) | ((final_sum << 8) & 0xFF00);
+
     net_ip(ip, pl, 8 + payload_len, 17);
 }
 _50 send_tcp_syn(_89 ip, _182 port) {
@@ -609,47 +651,57 @@ _50 e1000_check_rx() {
         }
 
         /// --- 2. WEICHE: DHCP (THE ULTIMATE PARSER) ---
-        _41 _15(len > 280+off AND raw_data[12+off] EQ 0x08 AND raw_data[13+off] EQ 0x00 AND raw_data[23+off] EQ 0x11) {
-            _15(raw_data[36+off] EQ 0x00 AND raw_data[37+off] EQ 68 AND raw_data[42+off] EQ 0x02) {
-                _15(raw_data[278+off] EQ 0x63 AND raw_data[279+off] EQ 0x82 AND raw_data[280+off] EQ 0x53 AND raw_data[281+off] EQ 0x63) {
+        /// BARE METAL FIX: Dynamische IP-Header-Länge berechnen!
+        _41 _15(raw_data[12+off] EQ 0x08 AND raw_data[13+off] EQ 0x00 AND raw_data[23+off] EQ 0x11) {
+            _43 ip_hl = (raw_data[14+off] & 0x0F) * 4; /// Berechnet die echte Header-Länge
+            _43 udp_start = 14 + off + ip_hl;
+            _43 bootp_start = udp_start + 8;
+
+            _15(len > bootp_start + 240) { /// Ist das Paket groß genug?
+                /// Port 68 (0x44) und BOOTP Reply (0x02) Check
+                _15(raw_data[udp_start+2] EQ 0x00 AND raw_data[udp_start+3] EQ 68 AND raw_data[bootp_start] EQ 0x02) {
                     
-                    _30* ip_ptr = ip_address;
-                    int_to_str(raw_data[58+off], ip_ptr); _114(*ip_ptr) ip_ptr++; *ip_ptr++ = '.';
-                    int_to_str(raw_data[59+off], ip_ptr); _114(*ip_ptr) ip_ptr++; *ip_ptr++ = '.';
-                    int_to_str(raw_data[60+off], ip_ptr); _114(*ip_ptr) ip_ptr++; *ip_ptr++ = '.';
-                    int_to_str(raw_data[61+off], ip_ptr); _114(*ip_ptr) ip_ptr++; *ip_ptr = 0;
-                    
-                    _43 j = 282 + off; /// Geändert zu j, um Konflikte zu vermeiden
-                    _43 msg_type = 0;
-                    _114(j < len AND raw_data[j] NEQ 255) {
-                        _184 opt = raw_data[j];
-                        _15(opt EQ 0) { j++; _101; } 
-                        _184 opt_len = raw_data[j+1];
+                    /// Magic Cookie Check an dynamischer Position
+                    _15(raw_data[bootp_start+236] EQ 0x63 AND raw_data[bootp_start+237] EQ 0x82 AND raw_data[bootp_start+238] EQ 0x53 AND raw_data[bootp_start+239] EQ 0x63) {
                         
-                        _15(opt EQ 53) msg_type = raw_data[j+2];
+                        _30* ip_ptr = ip_address;
+                        int_to_str(raw_data[bootp_start+16], ip_ptr); _114(*ip_ptr) ip_ptr++; *ip_ptr++ = '.';
+                        int_to_str(raw_data[bootp_start+17], ip_ptr); _114(*ip_ptr) ip_ptr++; *ip_ptr++ = '.';
+                        int_to_str(raw_data[bootp_start+18], ip_ptr); _114(*ip_ptr) ip_ptr++; *ip_ptr++ = '.';
+                        int_to_str(raw_data[bootp_start+19], ip_ptr); _114(*ip_ptr) ip_ptr++; *ip_ptr = 0;
                         
-                        _15(opt EQ 1 AND opt_len EQ 4) {
-                            _30* m_ptr = net_mask;
-                            int_to_str(raw_data[j+2], m_ptr); _114(*m_ptr) m_ptr++; *m_ptr++ = '.';
-                            int_to_str(raw_data[j+3], m_ptr); _114(*m_ptr) m_ptr++; *m_ptr++ = '.';
-                            int_to_str(raw_data[j+4], m_ptr); _114(*m_ptr) m_ptr++; *m_ptr++ = '.';
-                            int_to_str(raw_data[j+5], m_ptr); _114(*m_ptr) m_ptr++; *m_ptr = 0;
+                        _43 j = bootp_start + 240; 
+                        _43 msg_type = 0;
+                        _114(j < len AND raw_data[j] NEQ 255) {
+                            _184 opt = raw_data[j];
+                            _15(opt EQ 0) { j++; _101; } 
+                            _184 opt_len = raw_data[j+1];
+                            
+                            _15(opt EQ 53) msg_type = raw_data[j+2];
+                            
+                            _15(opt EQ 1 AND opt_len EQ 4) {
+                                _30* m_ptr = net_mask;
+                                int_to_str(raw_data[j+2], m_ptr); _114(*m_ptr) m_ptr++; *m_ptr++ = '.';
+                                int_to_str(raw_data[j+3], m_ptr); _114(*m_ptr) m_ptr++; *m_ptr++ = '.';
+                                int_to_str(raw_data[j+4], m_ptr); _114(*m_ptr) m_ptr++; *m_ptr++ = '.';
+                                int_to_str(raw_data[j+5], m_ptr); _114(*m_ptr) m_ptr++; *m_ptr = 0;
+                            }
+                            
+                            _15(opt EQ 3 AND opt_len >= 4) {
+                                _30* g_ptr = gateway_ip;
+                                int_to_str(raw_data[j+2], g_ptr); _114(*g_ptr) g_ptr++; *g_ptr++ = '.';
+                                int_to_str(raw_data[j+3], g_ptr); _114(*g_ptr) g_ptr++; *g_ptr++ = '.';
+                                int_to_str(raw_data[j+4], g_ptr); _114(*g_ptr) g_ptr++; *g_ptr++ = '.';
+                                int_to_str(raw_data[j+5], g_ptr); _114(*g_ptr) g_ptr++; *g_ptr = 0;
+                            }
+                            j += 2 + opt_len; 
                         }
                         
-                        _15(opt EQ 3 AND opt_len >= 4) {
-                            _30* g_ptr = gateway_ip;
-                            int_to_str(raw_data[j+2], g_ptr); _114(*g_ptr) g_ptr++; *g_ptr++ = '.';
-                            int_to_str(raw_data[j+3], g_ptr); _114(*g_ptr) g_ptr++; *g_ptr++ = '.';
-                            int_to_str(raw_data[j+4], g_ptr); _114(*g_ptr) g_ptr++; *g_ptr++ = '.';
-                            int_to_str(raw_data[j+5], g_ptr); _114(*g_ptr) g_ptr++; *g_ptr = 0;
-                        }
-                        j += 2 + opt_len; 
+                        _15(msg_type EQ 2) str_cpy(cmd_status, "DHCP OFFER RX (IP GEFUNDEN!)");
+                        _41 _15(msg_type EQ 5) str_cpy(cmd_status, "DHCP ACK RX (ONLINE!)");
+                        _41 str_cpy(cmd_status, "DHCP RX: PROTOCOL OK");
+                        packet_was_important = _128;
                     }
-                    
-                    _15(msg_type EQ 2) str_cpy(cmd_status, "DHCP OFFER RX (IP GEFUNDEN!)");
-                    _41 _15(msg_type EQ 5) str_cpy(cmd_status, "DHCP ACK RX (ONLINE!)");
-                    _41 str_cpy(cmd_status, "DHCP RX: PROTOCOL OK");
-                    packet_was_important = _128;
                 }
             }
         }
@@ -733,15 +785,18 @@ _50 check_incoming() {
             _15(raw_data[12] EQ 0x08 AND raw_data[13] EQ 0x00) {
                 /// Ist es UDP? (Protocol-Feld im IP-Header ist 17)
                 _15(raw_data[23] EQ 17) {
+                    _43 ip_hl = (raw_data[14] & 0x0F) * 4;
+                    _43 udp_start = 14 + ip_hl;
+                    _43 bootp_start = udp_start + 8;
+                    
                     /// Ist es DHCP? (Ziel-Port ist 68 / 0x0044)
-                    _15(raw_data[36] EQ 0x00 AND raw_data[37] EQ 0x44) {
+                    _15(raw_data[udp_start+2] EQ 0x00 AND raw_data[udp_start+3] EQ 0x44) {
                         str_cpy(cmd_status, "DHCP OFFER EMPFANGEN!");
-                        /// BINGO! Wir fischen die IP aus dem Paket (Offset 58)
-                        _43 ip1 = raw_data[58];
-                        _43 ip2 = raw_data[59];
-                        _43 ip3 = raw_data[60];
-                        _43 ip4 = raw_data[61];
-                        /// Die alte IP löschen und die neue in den String bauen
+                        _43 ip1 = raw_data[bootp_start+16];
+                        _43 ip2 = raw_data[bootp_start+17];
+                        _43 ip3 = raw_data[bootp_start+18];
+                        _43 ip4 = raw_data[bootp_start+19];
+                        
                         ip_address[0] = 0; 
                         _30 tmp[10];
                         int_to_str(ip1, tmp); str_cat(ip_address, tmp); str_cat(ip_address, ".");
@@ -768,13 +823,25 @@ _50 rtl8139_init(_89 io_addr) {
 }
 extern "C" _50 send_dhcp_discover() {
     /// BARE METAL FIX: Sicherheits-Check! 
-    /// Wenn die MAC-Adresse noch 00:00... ist, ist die Karte nicht initialisiert!
     if (mac_addr[0] == 0 && mac_addr[1] == 0 && mac_addr[2] == 0) {
         str_cpy(cmd_status, "ERR: NIC NOT INITIALIZED!");
-        return; /// Sofort abbrechen, bevor die CPU abstürzt!
+        return; 
     }
+
+    /// ========================================================
+    /// BARE METAL FIX: DER LINK-GUARD
+    /// Verhindert, dass du sendest, bevor der Switch bereit ist.
+    /// ========================================================
+    _15(intel_mem_base > 0) {
+        _89 status = mmio_read32(intel_mem_base + 0x0008);
+        _15((status & 0x02) EQ 0) {
+            str_cpy(cmd_status, "DHCP FEHLER: KABEL/LINK DOWN (WARTE!)");
+            return;
+        }
+    }
+
     /// Array sicher nullen
-    _184* dhcp = global_dhcp_buf; 
+    _184* dhcp = global_dhcp_buf;
     _39(_43 i=0; i<300; i++) dhcp[i] = 0;
     dhcp[0] = 1; /// Boot Request
     dhcp[1] = 1; /// Ethernet

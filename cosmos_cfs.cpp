@@ -14,7 +14,7 @@ _50 cfs_finalize_file(HBA_PORT* port, _71 _30* filename, _89 start_lba, _89 tota
     _15(!ahci_read(port, root_lba, root_dir_sector)) _96;
     CFS_DIR_ENTRY* entries = (CFS_DIR_ENTRY*)root_dir_sector;
     _43 free_slot = -1;
-    _39(_43 i = 0; i < 8; i++) {
+    _39(_43 i = 0; i <28; i++) {
         _15(entries[i].type EQ 0) { 
             free_slot = i;
             _37; 
@@ -40,7 +40,7 @@ _89 cfs_read_file(HBA_PORT* port, _71 _30* target_filename, _50* ram_destination
     CFS_DIR_ENTRY* entries = (CFS_DIR_ENTRY*)root_dir_sector;
     /// 2. Datei suchen
     _43 found_slot = -1;
-    _39(_43 i = 0; i < 8; i++) {
+    _39(_43 i = 0; i < 28; i++) {
         _15(entries[i].type EQ 1) {
             _15(str_cmp(entries[i].filename, target_filename) EQ 1) {
                 found_slot = i;

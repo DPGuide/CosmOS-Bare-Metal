@@ -588,7 +588,7 @@ _50 fat32_load_file(_43 port_no, _71 _30* target_filename) {
 /// ==========================================
 /// 3. DER FESTPLATTEN-SCANNER (INTEL Q67 EDITION)
 /// ==========================================
-_50 ahci_mount_drive() {
+extern "C" _50 ahci_mount_drive() {
     /// Wir löschen nicht mehr pauschal alles. Wir behalten alle Laufwerke,
     /// die KEINE SATA/AHCI-Platten sind (z.B. USB-Sticks mit Typ != 2).
     _43 retained_count = 0;
