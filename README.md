@@ -14,14 +14,14 @@ https://github.com/user-attachments/assets/875bba43-d745-42f8-8c85-3b098db35e8b
 
   ******
   ***update 27.05.2026***
-+ + owen CFS Filesystem (working fine)
-+ + 2 Retro Games / Ping Pong / Blobbey Volley
-+ + Editor Text messages
-+ + SATA / USB 1.1 / 2.0 / 3.0
-+ + more stable / TASK SHEDULER
-+ + *.bin to run 
-  + 3D Grafic
-  + Sound (older systems for now, its just up to youre mainboard)
++ owen CFS Filesystem (working fine)
++ 2 Retro Games / Ping Pong / Blobbey Volley
++ Editor Text messages
++ SATA / USB 1.1 / 2.0 / 3.0
++ more stable / TASK SHEDULER
++ *.bin to run 
++ 3D Grafic
++ Sound (older systems for now, its just up to youre mainboard)
 
  ******
   ***kernel.cpp is OS1 x32 - kernel_main.cpp is OS2 x64***
