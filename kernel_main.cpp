@@ -591,8 +591,48 @@ _43 input_cooldown = 0; _44 click_consumed = _86;
 struct Window { _43 id; _30 title[16]; _43 x, y, w, h; _44 open, minimized, fullscreen; _89 color; _30 content[2048]; _43 cursor_pos; };
 struct Planet { _43 ang; _43 dist; _30 name[8]; _43 cur_x, cur_y; }; 
 struct Star { _43 x, y, z, type, speed; };
-_43 win_z[13] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
-Window windows[13]; 
+_43 win_z[14] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13};
+Window windows[14]; 
+
+/// ==========================================
+/// BARE METAL FIX: GLOBAL DEBUG POPUP
+/// ==========================================
+_50 focus_window(_43 id);
+extern _50 str_cpy(_30* d, _71 _30* s);
+_50 debug_print(const char* msg) {
+    _15(!windows[13].open) {
+        windows[13].open = _128;
+        windows[13].minimized = _86;
+        str_cpy(windows[13].title, "SYSTEM DEBUG (POPUP)");
+        windows[13].x = 200; windows[13].y = 10;
+        windows[13].w = 400; windows[13].h = 200;
+        windows[13].color = 0x550000;
+        windows[13].cursor_pos = 0;
+        for(int i=0; i<2048; i++) windows[13].content[i] = 0;
+        focus_window(13);
+    }
+    
+    int len = 0;
+    while(windows[13].content[len] && len < 4000) len++;
+    
+    // Auto-Scroll Reset
+    if(len > 1800) {
+        len = 0;
+        for(int i=0; i<2048; i++) windows[13].content[i] = 0;
+    }
+    
+    int m = 0;
+    while(msg[m] && len < 2000) {
+        char c = msg[m++];
+        if (c >= 'a' && c <= 'z') c = c - 32; // Uppercase
+        if (c == '=') c = ':';
+        windows[13].content[len++] = c;
+    }
+    windows[13].content[len] = '\n';
+    windows[13].content[len+1] = 0;
+    windows[13].cursor_pos = len + 1;
+}
+
 Planet planets[5];
 Star stars[200];
 _43 drag_win = -1; _43 drag_off_x = 0; _43 drag_off_y = 0; _43 resize_win = -1; _44 z_blocked = _86;
@@ -790,7 +830,7 @@ int ahci_rw(uint32_t lba, uint64_t buffer_addr, int is_write) {
     uint64_t ctba_full = cmdheader[0].ctba | ((uint64_t)cmdheader[0].ctbau << 32);
     HBA_CMD_TBL* cmdtbl = (HBA_CMD_TBL*)ctba_full;
     
-    for(int i=0; i<128; i++) ((uint8_t*)cmdtbl)[i] = 0;
+    for(int i=0; i<138; i++) ((uint8_t*)cmdtbl)[i] = 0;
     
     /// 64-BIT FIX: RAM-Adresse in zwei 32-Bit Blöcke zerteilen für dba und dbau
     cmdtbl->prdt_entry[0].dba = (uint32_t)(buffer_addr & 0xFFFFFFFF); 
@@ -977,10 +1017,10 @@ void scan_pci_drives(Window* dsk_win) {
 }
 _50 focus_window(_43 id) { 
     _43 found_at = -1; 
-    _39(_43 i=0; i<13; i++) _15(win_z[i] EQ id) found_at = i; 
+    _39(_43 i=0; i<14; i++) _15(win_z[i] EQ id) found_at = i; 
     _15(found_at EQ -1) _96;
-    _39(_43 i=found_at; i<12; i++) win_z[i] = win_z[i+1]; 
-    win_z[12] = id; 
+    _39(_43 i=found_at; i<13; i++) win_z[i] = win_z[i+1]; 
+    win_z[13] = id; 
 }
 
 /// GANZ OBEN IN DER DATEI (Globaler Speicher für den Cursor)
@@ -1657,7 +1697,7 @@ extern void system_init_usb();
 extern "C" uint32_t xhci_bot_get_capacity(uint8_t slot_id);
 _50 toggle_app(_43 id) {
     Window* win = &windows[id];
-    _15(win->open AND !win->minimized AND win_z[12] EQ win->id) { win->minimized = _128; } 
+    _15(win->open AND !win->minimized AND win_z[13] EQ win->id) { win->minimized = _128; } 
     _41 { win->open = _128; win->minimized = _86; focus_window(win->id); }
 }
 extern _44 key_new;
@@ -2254,7 +2294,7 @@ extern "C" void main(BootInfo* boot_info) {
     /// ==========================================
     /// BARE METAL FIX: FENSTER SAUBER INITIALISIEREN
     /// ==========================================
-    _39(_43 i=0; i<13; i++) { windows[i].id = i; windows[i].open = _86; windows[i].minimized = _86; windows[i].cursor_pos = 0; windows[i].content[0] = 0; }
+    _39(_43 i=0; i<14; i++) { windows[i].id = i; windows[i].open = _86; windows[i].minimized = _86; windows[i].cursor_pos = 0; windows[i].content[0] = 0; }
     
     str_cpy(windows[0].title, "NOTEPAD");  windows[0].x=100; windows[0].y=100; windows[0].w=400; windows[0].h=300; windows[0].color=0xEEEEEE; 
     str_cpy(windows[1].title, "APPS");     windows[1].x=150; windows[1].y=150; windows[1].w=350; windows[1].h=250; windows[1].color=0xDDDDDD; 
@@ -2336,10 +2376,11 @@ extern "C" void main(BootInfo* boot_info) {
                 _15(sc EQ 0x3C) toggle_app(1); 
                 _15(sc EQ 0x3D) toggle_app(3); 
                 _15(sc EQ 0x3E) toggle_app(4); 
+                _15(sc EQ 0x44) toggle_app(13); /// F10 = SYSTEM DEBUG POPUP
                 _15(sc EQ 0x3F) toggle_app(5);
 
                 /// 2. Welches Fenster ist ganz oben (Fokus)?
-                _43 fw_id = win_z[12]; 
+                _43 fw_id = win_z[13]; 
                 Window* fw = &windows[fw_id];
                 
                 _15(fw AND fw->open AND !fw->minimized) {
@@ -2476,7 +2517,7 @@ extern "C" void main(BootInfo* boot_info) {
         } _41 { drag_win = -1; resize_win = -1; }
         
         _15(!mouse_handled) {
-            _39(_43 i=12; i>=0; i--) { 
+            _39(_43 i=13; i>=0; i--) { 
                 _43 k = win_z[i]; Window* win=&windows[k];
                 _15(win->open AND !win->minimized) {
                     _43 wx=(win->fullscreen?0:win->x); _43 wy=(win->fullscreen?0:win->y); _43 ww=(win->fullscreen?800:win->w); _43 wh=(win->fullscreen?600:win->h);
@@ -2757,7 +2798,7 @@ extern "C" void main(BootInfo* boot_info) {
 		/// BARE METAL FIX: Modal-Status berechnen, BEVOR die Fenster gezeichnet werden!
         /// Wenn Fenster ID 2 (Save As) offen und sichtbar ist, ist der Modus aktiv.
         _44 is_modal_blocked = (windows[2].open AND !windows[2].minimized);
-        _39(_43 i=0; i<13; i++) {
+        _39(_43 i=0; i<14; i++) {
             _43 k = win_z[i]; 
             Window* win = &windows[k];
             _15(!win->open OR win->minimized) continue;
@@ -2805,7 +2846,7 @@ extern "C" void main(BootInfo* boot_info) {
                 _43 btn_y = wy + 45;
                 
                 /// FIX: Nur Klicks zulassen, wenn das Fenster GANZ OBEN liegt!
-                _44 is_active = (win_z[12] EQ win->id);
+                _44 is_active = (win_z[13] EQ win->id);
                 
                 /// 1. THEME & LANG TOGGLES
                 _30 lang_lbl[20], theme_lbl[30];
@@ -3118,7 +3159,7 @@ extern "C" void main(BootInfo* boot_info) {
                     ahci_read_mbr(); /// Erkenne Dateisysteme (FAT32, NTFS, exFAT)
                 }
 
-                _44 is_active = (win_z[12] EQ win->id);
+                _44 is_active = (win_z[13] EQ win->id);
 txt_color = (win->color > 0x888888) ? 0x000000 : 0xFFFFFF;
                 uint32_t buf_mbr = 0x00900000;
                 uint32_t buf_dir = 0x00901000;
@@ -3719,14 +3760,14 @@ txt_color = (win->color > 0x888888) ? 0x000000 : 0xFFFFFF;
             /// ==========================================
             _15(win->id EQ 0) {
                 /// BARE METAL FIX: Fokus-Check für Notepad Buttons!
-                _44 is_active = (win_z[12] EQ win->id);
+                _44 is_active = (win_z[13] EQ win->id);
                 
                 /// BARE METAL FIX: Harte Farbe (Weiß) für Text!
                 _89 safe_txt_color = 0xFFFFFF; 
                 Text(wx+15, wy+45, win->content, safe_txt_color, _86);
                 
                 /// BARE METAL FIX: Sichtbarer Block-Cursor!
-                _15(win_z[12] EQ win->id AND (frame / 20) % 2 EQ 0) {
+                _15(win_z[13] EQ win->id AND (frame / 20) % 2 EQ 0) {
                     _43 cursor_off_x = 0; _43 cursor_off_y = 0;
                     _39(_43 c_idx = 0; c_idx < win->cursor_pos; c_idx++) { 
                         _15(win->content[c_idx] EQ '\n') { cursor_off_y += 15; cursor_off_x = 0; } 
@@ -3770,7 +3811,7 @@ txt_color = (win->color > 0x888888) ? 0x000000 : 0xFFFFFF;
             /// BARE METAL FIX: SAVE AS & CREATE FOLDER (ID 2)
             /// =========================================================
             _15(win->id EQ 2) {
-                _44 is_active = (win_z[12] EQ win->id);
+                _44 is_active = (win_z[13] EQ win->id);
                 /// Feste, sichere DMA RAM-Adressen (64-Bit OS2 Alignments)
                 uint32_t buf_dir = 0x00901000;
                 uint32_t text_ram_addr = 0x09000000; /// Gleicher Buffer wie beim normalen Save
@@ -3896,6 +3937,13 @@ txt_color = (win->color > 0x888888) ? 0x000000 : 0xFFFFFF;
                 }
             }
             /// ==========================================
+            /// SYSTEM DEBUG POPUP (ID 13)
+            /// ==========================================
+            _15(win->id EQ 13) {
+                _89 dbg_color = 0xFF5555;
+                Text(wx+15, wy+45, win->content, dbg_color, _86);
+            }
+            /// ==========================================
             /// CMD (ID 5) - BARE METAL FIX (SICHTBAR!)
             /// ==========================================
             _15(win->id EQ 5) {
@@ -3911,7 +3959,7 @@ txt_color = (win->color > 0x888888) ? 0x000000 : 0xFFFFFF;
                 /// ==========================================
                 /// TASTATUR-EINGABE & EXECUTION (Nur wenn aktiv)
                 /// ==========================================
-                _15(win_z[12] EQ win->id AND key_new) {
+                _15(win_z[13] EQ win->id AND key_new) {
                     _30 c = last_app_key;
                     
                     /// 1. BACKSPACE (Löschen)
