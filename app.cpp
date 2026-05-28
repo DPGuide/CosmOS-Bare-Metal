@@ -19,8 +19,8 @@ extern "C" __attribute__((section(".text.entry"))) void app_main() {
     // Beethoven's 5th Symphony Notes (Frequencies)
     // G4, G4, G4, Eb4, F4, F4, F4, D4
     uint64_t notes[] = { 392, 392, 392, 311, 0, 349, 349, 349, 293, 0 };
-    // Durations in "ticks"
-    uint64_t durations[] = { 10, 10, 10, 40, 20, 10, 10, 10, 40, 20 };
+    // Durations in "ticks" (1 tick = ~2ms because of yield)
+    uint64_t durations[] = { 100, 100, 100, 400, 200, 100, 100, 100, 400, 200 };
     
     int current_note = 0;
     int note_timer = 0;
@@ -51,7 +51,7 @@ extern "C" __attribute__((section(".text.entry"))) void app_main() {
         
         // Musik-Logik:
         note_timer++;
-        if (note_timer > durations[current_note] * 5) { // Skaliert für die Loop-Geschwindigkeit
+        if (note_timer > durations[current_note]) { 
             note_timer = 0;
             current_note++;
             if (current_note >= 10) {
@@ -68,8 +68,8 @@ extern "C" __attribute__((section(".text.entry"))) void app_main() {
             }
         }
         
-        // Kurze Bremse (Flummi Speed)
-        for(volatile int i = 0; i < 200000; i++) {}
+        // BARE METAL FIX: Keine volatile Bremse mehr!
+        // Wir nutzen ausschließlich OS-Ticks durch Yield, das ist zu 100% konstant!
         
         // Yield (Syscall 0)
         __asm__ volatile("mov $0, %%rax \n int $0x80" : : : "rax", "memory");

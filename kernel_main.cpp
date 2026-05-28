@@ -1647,8 +1647,16 @@ __attribute__((section(".text"), aligned(4096))) uint8_t safe_app_buffer[65536] 
 // 1. Die neue Multi-Read Funktion aus cosmos_ahci.cpp anmelden!
 extern _44 ahci_read_multi(HBA_PORT* port, _89 startlba, _43 count, _50* target_ram_address);
 
+bool has_free_task_slot() {
+    if (num_tasks < 4) return true;
+    for (int i = 1; i < 4; i++) {
+        if (!tasks[i].active) return true;
+    }
+    return false;
+}
+
 bool load_and_run_bin(uint32_t start_lba, uint32_t sector_count) {
-    if (num_tasks >= 4) return false;
+    if (!has_free_task_slot()) return false;
     
     uint64_t target_ram = 0x01100000; 
     uint8_t* ram = (uint8_t*)target_ram;
@@ -2129,7 +2137,7 @@ void process_cmd(char* input, Window* cmd_win) {
     /// NEU: DER TASK-SPAWNER BEFEHL
     /// ==========================================
     else if(str_equal(input, "START")) {
-        if (num_tasks < 4) {
+        if (has_free_task_slot()) {
             create_task(dynamic_task_worker);
             print_win(cmd_win, "BACKGROUND TASK SPAWNED.\n");
         } else {
@@ -3085,6 +3093,7 @@ extern "C" void main(BootInfo* boot_info) {
                             Text(wx+254, task_y+4, "||", 0xFFFFFF, _86);
                             _15(input_cooldown EQ 0 AND mouse_just_pressed AND is_active AND is_over_rect(mouse_x, mouse_y, wx+250, task_y+2, 26, 16)) {
                                 tasks[t].paused = !tasks[t].paused;
+                                if (tasks[t].paused) play_freq(0);
                                 input_cooldown = 20;
                             }
                             
@@ -3094,6 +3103,7 @@ extern "C" void main(BootInfo* boot_info) {
                             _15(input_cooldown EQ 0 AND mouse_just_pressed AND is_active AND is_over_rect(mouse_x, mouse_y, wx+280, task_y+2, 26, 16)) {
                                 tasks[t].active = _86;
                                 tasks[t].paused = _86;
+                                play_freq(0);
                                 input_cooldown = 20;
                             }
                         }
