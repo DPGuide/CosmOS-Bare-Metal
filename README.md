@@ -11,11 +11,11 @@ https://github.com/user-attachments/assets/875bba43-d745-42f8-8c85-3b098db35e8b
 + 2 Retro Games / Ping Pong / Blobbey Volley
 + Editor Text messages
 + SATA / USB 1.1 / 2.0 / 3.0
-+ + GPT / CFS [SATA / USB (x) / (x) ] 
-+ + GPT / NFTS [SATA / USB (x) / ( ) ] 
-+ + GPT / FAT32 [USB ( ) ] 
-+ + GPT / exFAT [USB ( ) ] 
-+ + GPT / ExT [SATA / USB ( ) / ( ) ] 
++ + MBR / GPT / CFS [SATA / USB (x) / (x) ] 
++ + MBR / GPT / NFTS [SATA / USB (x) / ( ) ] 
++ + MBR / GPT / FAT32 [USB ( ) ] 
++ + MBR / GPT / exFAT [USB ( ) ] 
++ + MBR / GPT / ExT [SATA / USB ( ) / ( ) ] 
 + more stable / TASK SHEDULER ( [II] Break or [X] Close Task
 + *.bin to run 
 + 2D / 3D Grafic
