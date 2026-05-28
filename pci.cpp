@@ -463,14 +463,39 @@ inline unsigned char mmio_read8(_89 address) {
 extern _50 debug_print(const char* msg);
 
 _184 xhci_check_ports(uintptr_t op_base, _43 max_ports) {
-    debug_print("XHCI: Waiting 20M cycles for boot...");
-    /// 1. DIE GEDENKSEKUNDE: Wir warten, bis der Stick gebootet hat
-    _39(_43 wait = 0; wait < 20000000; wait++) { asm volatile("nop"); }
+    debug_print("XHCI: Waiting for ports to power up...");
+    _39(_43 wait = 0; wait < 10000000; wait++) { asm volatile("nop"); }
 
     _44 found = _86;
     _39(_43 i = 1; i <= max_ports; i++) {
         uint64_t portsc_addr = op_base + 0x400 + ((i - 1) * 0x10);
         _89 portsc = mmio_read32(portsc_addr);
+
+        /// BARE METAL FIX: Wenn das Device noch im Polling (State 7) hängt, warten wir!
+        _43 timeout = 0;
+        _114((portsc & 1) AND ((portsc >> 5) & 0xF) == 7 AND timeout < 50000000) {
+            portsc = mmio_read32(portsc_addr);
+            timeout++;
+            asm volatile("nop");
+        }
+
+        /// BARE METAL FIX: Port Reset (PR, Bit 4) auslösen, falls verbunden aber nicht aktiv!
+        _15((portsc & 1) AND !(portsc & 2)) {
+            debug_print("XHCI: Issuing Port Reset...");
+            mmio_write32(portsc_addr, portsc | (1 << 4)); /// Set Port Reset (PR)
+            
+            _43 reset_timeout = 0;
+            _114(reset_timeout < 50000000) {
+                portsc = mmio_read32(portsc_addr);
+                _15((portsc & (1 << 4)) == 0) _37; /// PR cleared automatically
+                _15(portsc & (1 << 21)) {          /// PRC (Port Reset Change) is set
+                    mmio_write32(portsc_addr, portsc | (1 << 21)); /// Clear PRC
+                    _37;
+                }
+                reset_timeout++;
+                asm volatile("nop");
+            }
+        }
 
         _30 dbg[64];
         str_cpy(dbg, "XHCI Port "); int_to_str(i, dbg+10);
@@ -478,9 +503,9 @@ _184 xhci_check_ports(uintptr_t op_base, _43 max_ports) {
         str_cpy(dbg+dl, " PORTSC="); hex_to_str_32(portsc, dbg+dl+8);
         debug_print(dbg);
 
-        /// Bit 0 ist der "Current Connect Status"
-        _15(portsc & 0x01) {
-            debug_print("XHCI: Device connected!");
+        /// Bit 0: Connect Status, Bit 1: Port Enabled
+        _15((portsc & 1) AND (portsc & 2)) {
+            debug_print("XHCI: Device connected and ENABLED!");
             /// Wir lesen die Geschwindigkeit des Sticks (Bits 10-13)
             _89 port_speed = (portsc >> 10) & 0x0F;
             
