@@ -20,7 +20,7 @@ https://github.com/user-attachments/assets/875bba43-d745-42f8-8c85-3b098db35e8b
 + *.bin to run 
 + 2D / 3D Grafic
 + Sound 3.5 mm audio jack (older systems for now, its just up to youre mainboard)
-+ DEBUG PopUP Window 
++ DEBUG PopUP Window [HOT KEY (F10)]
  ******
   ***kernel.cpp is OS1 x32 - kernel_main.cpp is OS2 x64***
  ******
