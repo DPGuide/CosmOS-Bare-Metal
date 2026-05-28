@@ -424,3 +424,42 @@ extern "C" void play_hda_earthquake() {
     hda_write8(stream_base + 0x03, 0x1C);
     hda_write8(stream_base + 0x00, 0x02 | 0x04);
 }
+
+extern "C" void play_hda_wav(uint32_t pcm_addr, uint32_t size_bytes, uint16_t sample_rate, uint16_t channels, uint16_t bits) {
+    if (hda_output_stream_offset == 0 || hda_dac_nid == 0) return;
+    uint32_t stream_base = hda_output_stream_offset;
+    
+    hda_stream_reset(stream_base);
+    
+    volatile uint32_t* bdl = (volatile uint32_t*)HDA_BDL_PHYS;
+    bdl[0] = pcm_addr;
+    bdl[1] = 0;
+    bdl[2] = size_bytes;
+    bdl[3] = 1; /// IOC
+    
+    asm volatile("wbinvd" ::: "memory");
+    
+    uint16_t fmt = 0;
+    if (sample_rate == 44100) fmt |= (1 << 14); 
+    
+    if (bits == 16) fmt |= (1 << 4);
+    else if (bits == 20) fmt |= (2 << 4);
+    else if (bits == 24) fmt |= (3 << 4);
+    else if (bits == 32) fmt |= (4 << 4);
+    
+    fmt |= (channels - 1) & 0x0F;
+    
+    hda_send_verb(hda_codec_id, hda_dac_nid, 0x200, fmt);
+    
+    hda_write32(stream_base + 0x18, HDA_BDL_PHYS);
+    hda_write32(stream_base + 0x1C, 0);
+    
+    hda_write32(stream_base + 0x08, size_bytes);
+    hda_write16(stream_base + 0x0C, 0);
+    
+    hda_write16(stream_base + 0x12, fmt);
+    hda_write8(stream_base + 0x02, (1 << 4)); 
+    
+    hda_write8(stream_base + 0x03, 0x1C);
+    hda_write8(stream_base + 0x00, 0x02 | 0x04);
+}

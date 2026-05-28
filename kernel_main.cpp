@@ -1644,9 +1644,6 @@ unsigned int app_bin_len = 333;
 // Unser unzerstörbarer Puffer im Code-Segment
 __attribute__((section(".text"), aligned(4096))) uint8_t safe_app_buffer[65536] = {0};
 
-// 1. Die neue Multi-Read Funktion aus cosmos_ahci.cpp anmelden!
-extern _44 ahci_read_multi(HBA_PORT* port, _89 startlba, _43 count, _50* target_ram_address);
-
 bool has_free_task_slot() {
     if (num_tasks < 4) return true;
     for (int i = 1; i < 4; i++) {
@@ -1655,25 +1652,25 @@ bool has_free_task_slot() {
     return false;
 }
 
+// BARE METAL FIX: Universal Disk Read (funktioniert für SATA Festplatten UND USB-Sticks!)
+extern "C" _44 disk_read_auto(_89 lba, _89 target_addr);
+
 bool load_and_run_bin(uint32_t start_lba, uint32_t sector_count) {
     if (!has_free_task_slot()) return false;
     
     uint64_t target_ram = 0x01100000; 
     uint8_t* ram = (uint8_t*)target_ram;
     
-    HBA_MEM* hba = (HBA_MEM*)active_ahci_bar5;
-    if (hba == nullptr) return false;
-
     str_cpy(cmd_status, "LADE FLUMMI...");
-
-    HBA_PORT* port = &hba->ports[active_sata_port];
 
     for(uint32_t i=0; i < 512 * sector_count; i++) ram[i] = 0;
     
-    // Wir lesen DIREKT von LBA 10000. Kein Radar mehr nötig!
-    if (ahci_read_multi(port, start_lba, sector_count, (void*)target_ram) == 0) {
-        str_cpy(cmd_status, "ERR: LESEFEHLER!");
-        return false;
+    for(uint32_t s=0; s < sector_count; s++) {
+        if (!disk_read_auto(start_lba + s, target_ram + (s * 512))) {
+            str_cpy(cmd_status, "ERR: LESEFEHLER!");
+            return false;
+        }
+        for(volatile int w=0; w<2000; w++) __asm__ volatile("nop"); // Kurze Pause für sauberes USB-Timing
     }
     
     // ==========================================
@@ -3755,10 +3752,17 @@ txt_color = (win->color > 0x888888) ? 0x000000 : 0xFFFFFF;
                                             if (((uint8_t*)buf_mbr)[82]=='F' && ((uint8_t*)buf_mbr)[83]=='A' && ((uint8_t*)buf_mbr)[84]=='T') { target_fat32_lba = slba; _37; }
                                         }
                                     }
-                                } _41 _15(part_type == 0x07 || (boot[3]=='N' && boot[4]=='T')) {
-                                    target_ntfs_lba = *(_43*)&boot[446 + 8];
-                                } _41 _15(part_type == 0x0B || part_type == 0x0C || (boot[82]=='F' && boot[83]=='A' && boot[84]=='T')) {
-                                    target_fat32_lba = (boot[82]=='F') ? 0 : *(_43*)&boot[446 + 8];
+                                } _41 {
+                                    _39(int p=0; p<4; p++) {
+                                        uint8_t pt = boot[446 + (p * 16) + 4];
+                                        _15(pt == 0x07 || (boot[3]=='N' && boot[4]=='T')) {
+                                            target_ntfs_lba = *(_43*)&boot[446 + (p * 16) + 8];
+                                            _37;
+                                        } _41 _15(pt == 0x0B || pt == 0x0C || (boot[82]=='F' && boot[83]=='A' && boot[84]=='T')) {
+                                            target_fat32_lba = (boot[82]=='F') ? 0 : *(_43*)&boot[446 + (p * 16) + 8];
+                                            _37;
+                                        }
+                                    }
                                 }
                             }
                             
@@ -3799,7 +3803,7 @@ txt_color = (win->color > 0x888888) ? 0x000000 : 0xFFFFFF;
                                 
                                 FAT32_BPB* bpb = (FAT32_BPB*)buf_dir;
                                 fat32_sectors_per_cluster = bpb->sectors_per_cluster;
-                                uint32_t fat_start = bpb->hidden_sectors + bpb->reserved_sectors;
+                                uint32_t fat_start = bpb->reserved_sectors;
                                 fat32_data_start = fat_start + (bpb->fat_count * bpb->sectors_per_fat_32);
                                 active_fat32_folder_lba = fat32_data_start + ((bpb->root_cluster - 2) * bpb->sectors_per_cluster);
                                 /// Start is offset by target_fat32_lba (the partition start)
