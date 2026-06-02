@@ -16,6 +16,7 @@ https://github.com/user-attachments/assets/875bba43-d745-42f8-8c85-3b098db35e8b
 + Editor Text messages
 + NETWORK MAC (x) / IP (x) / DONE !
 + WEBBROWSER (/)
++ owen Decompressor (x) onliest true NEXT GEN ! All other are Fake !
 + bmp 24 bit true color (x)
 + SATA / USB 1.1 (x) / 2.0 () / 3.0 (/)
 + + MBR / GPT / CFS [SATA / USB (x) / (x) ] 
