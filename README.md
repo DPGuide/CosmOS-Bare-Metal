@@ -7,6 +7,10 @@ https://github.com/user-attachments/assets/875bba43-d745-42f8-8c85-3b098db35e8b
 
 <img width="786" height="619" alt="image" src="https://github.com/user-attachments/assets/36788492-482c-4f17-a96d-d815bdb92199" />
 
+***png/jpg2bmpconverT***
+<img width="797" height="533" alt="image" src="https://github.com/user-attachments/assets/77a9425b-f811-4ff5-9381-06e6abfa030e" />
+
+
 
  ******
 ***with RUFUS in DD MODE THE ISO or Ventoy just copy the ISO on the USB-Stick***
@@ -21,7 +25,7 @@ https://github.com/user-attachments/assets/875bba43-d745-42f8-8c85-3b098db35e8b
 + NETWORK MAC (x) / IP (x) 1000 MBIT (x)
 + WEBBROWSER (/)  
 + owen Decompressor (x) onliest true NEXT GEN ! All other are Fake !
-+ bmp 24 bit true color (x) [jpg/png to bmp convert) (/)]
++ bmp 24 bit true color (x) [jpg/png to bmp convert) (x)]
 + SATA / USB 1.1 (x) / 2.0 () / 3.0 (/)
 + + MBR / GPT / CFS [SATA / USB (x) / (x) ] 
 + + MBR / GPT / NFTS [SATA / USB (x) / (\) ] 
