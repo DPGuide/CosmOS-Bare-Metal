@@ -3,10 +3,6 @@
  ******
 https://github.com/user-attachments/assets/875bba43-d745-42f8-8c85-3b098db35e8b
 
-<img width="790" height="592" alt="image" src="https://github.com/user-attachments/assets/05168066-5911-4970-bd0d-ef8a21486a3c" />
-
-<img width="797" height="533" alt="image" src="https://github.com/user-attachments/assets/77a9425b-f811-4ff5-9381-06e6abfa030e" />
-
 
 
  ******
