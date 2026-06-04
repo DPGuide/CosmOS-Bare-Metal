@@ -20,7 +20,7 @@ https://github.com/user-attachments/assets/875bba43-d745-42f8-8c85-3b098db35e8b
 + NETWORK MAC (x) / IP (x) 1000 MBIT (x)
 + WEBBROWSER (/)  
 + owen Decompressor (x) onliest true NEXT GEN ! All other are Fake !
-+ bmp 24 bit true color (x)
++ bmp 24 bit true color (x) [jpg/png to bmp converter)]
 + SATA / USB 1.1 (x) / 2.0 () / 3.0 (/)
 + + MBR / GPT / CFS [SATA / USB (x) / (x) ] 
 + + MBR / GPT / NFTS [SATA / USB (x) / (\) ] 
