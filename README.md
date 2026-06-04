@@ -19,7 +19,7 @@ https://github.com/user-attachments/assets/875bba43-d745-42f8-8c85-3b098db35e8b
   ******
   ***update***
   ***HARDWARE***
-+ fonts (/)
++ fonts (/) [WEBBROWSER]
 + owen CFS Filesystem (working fine)
 + 2 Retro Games / Ping Pong / Blobbey Volley
 + Editor Text messages
