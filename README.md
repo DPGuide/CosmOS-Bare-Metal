@@ -26,7 +26,7 @@ first intel console x86
 + bmp 24 bit true color (x) [jpg/png to bmp convert) (x)]
 + SATA / USB 1.1 (x) / 2.0 (/) / 3.0 (/)
 + + MBR / GPT / CFS [SATA / USB (x) / (x) ] 
-+ + MBR / GPT / NFTS [SATA / USB (x) / (\) ] 
++ + MBR / GPT / NFTS [SATA / USB (x) / (/) ] 
 + + MBR / GPT / FAT32 [USB (/) ] 
 + + MBR / GPT / exFAT [USB (/) ] 
 + + MBR / GPT / ExT [SATA / USB ( ) / ( ) ] 
