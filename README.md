@@ -18,7 +18,7 @@ first intel console x86
 + Internet Defender (x)
 +  ELF-Loader (/)
 +  File-Downloader (/)
-+  Command-Line-Interpreter (CMD) (/)
++  Command-Line-Interpreter INSTALL (CMD) (/)
 + WEBBROWSER (/)  
 + owen Decompressor (x) onliest true NEXT GEN ! All other are Fake ! (x)
 + bmp 24 bit true color (x) [jpg/png to bmp convert) (x)]
