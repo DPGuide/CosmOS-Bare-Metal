@@ -1,5 +1,6 @@
  ******
 ***BARE METAL cosmOS x32 & x64***
+first intel console x86
  ******
 https://github.com/user-attachments/assets/875bba43-d745-42f8-8c85-3b098db35e8b
 
