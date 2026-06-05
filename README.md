@@ -33,7 +33,7 @@ https://github.com/user-attachments/assets/875bba43-d745-42f8-8c85-3b098db35e8b
 + + MBR / GPT / FAT32 [USB (/) ] 
 + + MBR / GPT / exFAT [USB ( ) ] 
 + + MBR / GPT / ExT [SATA / USB ( ) / ( ) ] 
-+ more stable / TASK SHEDULER ( [II] Break or [X] Close Task
++ more stable / TASK SHEDULER ( [II] Break or [X] Close Task (x)
 + *.bin to run  (x)
 + 2D / 3D Grafic (x)
 + Sound 3.5 mm audio jack (older systems for now, its just up to youre mainboard) (x)
