@@ -28,7 +28,7 @@ first intel console x86
 + + MBR / GPT / CFS [SATA / USB (x) / (x) ] 
 + + MBR / GPT / NFTS [SATA / USB (x) / (\) ] 
 + + MBR / GPT / FAT32 [USB (/) ] 
-+ + MBR / GPT / exFAT [USB ( ) ] 
++ + MBR / GPT / exFAT [USB (/) ] 
 + + MBR / GPT / ExT [SATA / USB ( ) / ( ) ] 
 + more stable / TASK SHEDULER ( [II] Break or [X] Close Task (x)
 + *.bin to run  (x)
