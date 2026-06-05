@@ -3,6 +3,9 @@
  ******
 https://github.com/user-attachments/assets/875bba43-d745-42f8-8c85-3b098db35e8b
 
+<img width="426" height="320" alt="image" src="https://github.com/user-attachments/assets/caa2765e-04da-4473-8372-d25685ad1f5b" />
+
+<img width="710" height="521" alt="image" src="https://github.com/user-attachments/assets/31714d73-0043-486c-b8a9-5f62a956a198" />
 
 
  ******
@@ -16,7 +19,10 @@ https://github.com/user-attachments/assets/875bba43-d745-42f8-8c85-3b098db35e8b
 + 2 Retro Games / Ping Pong / Blobbey Volley
 + Editor Text messages
 + NETWORK MAC (x) / IP (x) 1000 MBIT (x)
-+ Internet Defender (/)
++ Internet Defender (x)
++  ELF-Loader (/)
++  File-Downloader (/)
++  Command-Line-Interpreter (CMD) (/)
 + WEBBROWSER (/)  
 + owen Decompressor (x) onliest true NEXT GEN ! All other are Fake !
 + bmp 24 bit true color (x) [jpg/png to bmp convert) (x)]
