@@ -110,4 +110,29 @@ extern "C" uint64_t create_process_space() {
     _96 new_pml4;
 }
 
+extern "C" void* memcpy(void* dest, const void* src, unsigned long n) {
+    unsigned char* d = (unsigned char*)dest;
+    const unsigned char* s = (const unsigned char*)src;
+    for (unsigned long i = 0; i < n; i++) {
+        *(volatile unsigned char*)&d[i] = *(volatile unsigned char*)&s[i];
+    }
+    return dest;
+}
+
+extern "C" void* memset(void* s, int c, unsigned long n) {
+    unsigned char* p = (unsigned char*)s;
+    for (unsigned long i = 0; i < n; i++) {
+        *(volatile unsigned char*)&p[i] = (unsigned char)c;
+    }
+    return s;
+}
+
+extern "C" void* __memset_chk(void *dest, int ch, unsigned long len, unsigned long destlen) {
+    return memset(dest, ch, len);
+}
+
+extern "C" void* __memcpy_chk(void *dest, const void *src, unsigned long len, unsigned long destlen) {
+    return memcpy(dest, src, len);
+}
+
 #endif /// Ende des 64-Bit Blocks

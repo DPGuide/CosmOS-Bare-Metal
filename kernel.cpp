@@ -35,9 +35,18 @@ void init_heap() {
 }
 
 void* malloc(size_t size) {
+    size = (size + 7) & ~7;
     MemoryBlock* curr = heap_head;
     while (curr != nullptr) {
         if (curr->is_free == 1 && curr->size >= size) {
+            if (curr->size > size + sizeof(MemoryBlock) + 32) {
+                MemoryBlock* new_block = (MemoryBlock*)((uint8_t*)curr + sizeof(MemoryBlock) + size);
+                new_block->is_free = 1;
+                new_block->size = curr->size - size - sizeof(MemoryBlock);
+                new_block->next = curr->next;
+                curr->size = size;
+                curr->next = new_block;
+            }
             curr->is_free = 0;
             return (void*)((uint8_t*)curr + sizeof(MemoryBlock));
         }
@@ -651,20 +660,23 @@ _50 kernel_panic(_71 _30* error_msg) {
 _172 GraphicsCardInfo main_gfx_card;
 _172 _50 pci_find_gfx_card();
 _30 get_ascii(_184 sc) {
-    _15(sc > 58) _96 0;
-    /// DEUTSCHES QWERTZ LAYOUT
-    _72 _30 k_low[] = {
-        0,27,'1','2','3','4','5','6','7','8','9','0','-','=','\b','\t',
-        'q','w','e','r','t','z','u','i','o','p','[',']','\n',0,
-        'a','s','d','f','g','h','j','k','l',';','\'','`',0,'\\',
-        'y','x','c','v','b','n','m',',','.','-',0,'*',0,' '
-    };
-    _72 _30 k_up[]  = {
+    _30 k_low[128] = { 0 };
+    k_low[1] = 27; k_low[2] = '1'; k_low[3] = '2'; k_low[4] = '3'; k_low[5] = '4'; k_low[6] = '5'; k_low[7] = '6'; k_low[8] = '7'; k_low[9] = '8'; k_low[10] = '9'; k_low[11] = '0'; k_low[12] = '-'; k_low[13] = '='; k_low[14] = '\b'; k_low[15] = '\t';
+    k_low[16] = 'q'; k_low[17] = 'w'; k_low[18] = 'e'; k_low[19] = 'r'; k_low[20] = 't'; k_low[21] = 'z'; k_low[22] = 'u'; k_low[23] = 'i'; k_low[24] = 'o'; k_low[25] = 'p'; k_low[28] = '\n';
+    k_low[30] = 'a'; k_low[31] = 's'; k_low[32] = 'd'; k_low[33] = 'f'; k_low[34] = 'g'; k_low[35] = 'h'; k_low[36] = 'j'; k_low[37] = 'k'; k_low[38] = 'l';
+    k_low[43] = '/'; /// BARE METAL FIX: '#' is now '/'
+    k_low[44] = 'y'; k_low[45] = 'x'; k_low[46] = 'c'; k_low[47] = 'v'; k_low[48] = 'b'; k_low[49] = 'n'; k_low[50] = 'm'; k_low[51] = ','; k_low[52] = '.'; k_low[53] = '-'; k_low[55] = '*'; k_low[57] = ' ';
+    k_low[41] = '/'; /// BARE METAL FIX: '^' is now '/'
+    k_low[27] = '/'; /// BARE METAL FIX: '+' is now '/'
+    k_low[74] = '-'; /// Numpad -
+    k_low[78] = '+'; /// Numpad +
+    _72 _30 k_up[128]  = {
         0,27,'!','"','#','$','%','&','/','(',')','=','?','`','\b','\t',
         'Q','W','E','R','T','Z','U','I','O','P','{','}','\n',0,
         'A','S','D','F','G','H','J','K','L',':','\'','~',0,'|',
         'Y','X','C','V','B','N','M',';',':','_',0,'*',0,' '
     };
+    if (sc >= 128) return 0;
     _96 key_shift ? k_up[sc] : k_low[sc];
 }
 _44 is_over_rect(_43 mx, _43 my, _43 x, _43 y, _43 w, _43 h) { _43 m = touch_mode ? 30 : 0; _96 (mx >= x-m AND mx <= x+w+m AND my >= y-m AND my <= y+h+m); }
@@ -1509,7 +1521,7 @@ _50 nic_select_next() {
         rtl8139_init(addr); 
     } _41 _15(found_nics[active_nic_idx].type EQ 2) { 
         str_cpy(cmd_status, "BOOTING INTEL...");
-        intel_e1000_init(addr); 
+        intel_e1000_init(addr, found_nics[active_nic_idx].device_id); 
     } _41 _15(found_nics[active_nic_idx].type EQ 3) { 
         str_cpy(mac_str, "5C:F6:DC:32:C6:47"); 
         _15(usb_io_base NEQ 0) uhci_init(usb_io_base); 

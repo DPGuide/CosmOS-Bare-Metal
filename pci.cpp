@@ -194,6 +194,11 @@ void map_mmio_64(uint64_t phys_addr) {
     
     /// FIX 2: Absolut sicherer TLB Flush (CR3 Reload) statt invlpg
     __asm__ volatile("mov %0, %%cr3" : : "r"(cr3) : "memory");
+    
+    /// BARE METAL FIX: Wenn die Seite vorher als Write-Back gecached war,
+    /// müssen wir den Cache zwingend leeren, sonst liest die CPU beim nächsten Zugriff
+    /// weiterhin aus dem Cache statt vom echten Gerätebelag!
+    __asm__ volatile("wbinvd" ::: "memory");
 }
 #else
 void map_mmio_64(uint64_t phys_addr) {}
@@ -315,7 +320,7 @@ _50 pci_find_gfx_card() {
         }
     }
 }
-_50 xhci_bios_handoff(_89 cap_base) {
+_50 xhci_bios_handoff(uintptr_t cap_base) {
     _89 hccparams1 = mmio_read32(cap_base + 0x10);
     _43 xecp_offset = (hccparams1 >> 16) & 0xFFFF;
     _15(xecp_offset EQ 0) _96;
@@ -372,6 +377,11 @@ _50 xhci_reset(uintptr_t op_base) {
     _39(_43 wait = 0; wait < 100000; wait++) {
         _15((mmio_read32(op_base) & 0x02) EQ 0) _37;
     }
+    /// 6. BARE METAL FIX: Warten, bis Controller Not Ready (CNR, Bit 11 in USBSTS) 0 wird!
+    _39(_43 wait = 0; wait < 10000000; wait++) {
+        _15((mmio_read32(status_reg) & (1 << 11)) EQ 0) _37;
+        asm volatile("nop");
+    }
 }
 
 extern _50 debug_print(const char* msg);
@@ -388,9 +398,41 @@ _50 hex_to_str_32(_89 val, _30* str) {
 extern uint64_t global_xhci_base_addr;
 
 extern "C" _50 xhci_init_controller(uintptr_t op_base) {
+    /// =========================================================
+    /// BARE METAL FIX: xHCI DMA-ZONEN UNCACHEABLE MAPPEN!
+    /// Ohne das liest die CPU ihren Cache statt den echten RAM,
+    /// den der xHCI-Controller per DMA beschreibt.
+    /// Das verursacht die 0xFFFFFFFF Werte auf allen Ports!
+    /// =========================================================
+    map_mmio_64(0x04000000); /// Slot context memory
+    map_mmio_64(0x04090000); /// EP OUT ring
+    map_mmio_64(0x040A0000); /// EP IN ring
+    map_mmio_64(0x04100000); /// Slot base (multiple slots)
+    map_mmio_64(0x04200000); /// Slot base continued
+    map_mmio_64(0x04400000); /// Slot base continued
+    map_mmio_64(0x06500000); /// Mouse buffer
+    map_mmio_64(0x08000000); /// xHCI cmd ring area
+    map_mmio_64(0x08010000); /// cmd ring
+    map_mmio_64(0x08020000); /// event ring
+    map_mmio_64(0x08030000); /// erst
+    map_mmio_64(0x08100000); /// DCBAA
+
     xhci_db_base = op_base - *((volatile uint8_t*)(global_xhci_base_addr)) + *((volatile uint32_t*)(global_xhci_base_addr + 0x14));
     
     xhci_reset(op_base);
+    
+    /// BARE METAL FIX: Zeiger zurücksetzen nach Reset!
+    xhci_cmd_idx = 0;
+    xhci_ev_idx = 0;
+    xhci_cmd_cycle = 1;
+    xhci_ev_cycle = 1;
+
+    /// Speicher KOMPLETT nullen, bevor der Controller ihn sieht!
+    _39(_43 i = 0; i < 512; i++) {
+        ((uint64_t*)xhci_dcbaa)[i] = 0;
+        ((uint64_t*)xhci_cmd_ring)[i] = 0;
+        ((uint64_t*)xhci_ev_ring)[i] = 0;
+    }
     
     /// 1. DCBAAP setzen
     mmio_write32(op_base + 0x30, (uint32_t)((uint64_t)xhci_dcbaa & 0xFFFFFFFF));
@@ -466,10 +508,16 @@ _184 xhci_check_ports(uintptr_t op_base, _43 max_ports) {
     debug_print("XHCI: Waiting for ports to power up...");
     _39(_43 wait = 0; wait < 10000000; wait++) { asm volatile("nop"); }
 
-    _44 found = _86;
+    _184 best_slot = 0;
+    _184 found = 0;
     _39(_43 i = 1; i <= max_ports; i++) {
-        uint64_t portsc_addr = op_base + 0x400 + ((i - 1) * 0x10);
+        _89 portsc_addr = op_base + 0x400 + (0x10 * (i - 1));
         _89 portsc = mmio_read32(portsc_addr);
+        
+        /// DEBUG PRINT
+        extern char cmd_status[256];
+        str_cpy(cmd_status, "xHCI: SCANNING PORT ");
+        int_to_str(i, cmd_status + 20);
 
         /// BARE METAL FIX: Wenn das Device noch im Polling (State 7) hängt, warten wir!
         _43 timeout = 0;
@@ -481,20 +529,27 @@ _184 xhci_check_ports(uintptr_t op_base, _43 max_ports) {
 
         /// BARE METAL FIX: Port Reset (PR, Bit 4) auslösen, falls verbunden aber nicht aktiv!
         _15((portsc & 1) AND !(portsc & 2)) {
-            debug_print("XHCI: Issuing Port Reset...");
-            mmio_write32(portsc_addr, portsc | (1 << 4)); /// Set Port Reset (PR)
+            /// Port ist verbunden (Bit 0) aber noch nicht aktiv (Bit 1). 
+            /// Wir MÜSSEN den Port resetten (Bit 4)!
+            mmio_write32(portsc_addr, portsc | (1 << 4)); 
             
             _43 reset_timeout = 0;
-            _114(reset_timeout < 50000000) {
+            _114(reset_timeout < 500) { /// 500 Versuche
                 portsc = mmio_read32(portsc_addr);
-                _15((portsc & (1 << 4)) == 0) _37; /// PR cleared automatically
-                _15(portsc & (1 << 21)) {          /// PRC (Port Reset Change) is set
-                    mmio_write32(portsc_addr, portsc | (1 << 21)); /// Clear PRC
-                    _37;
+                
+                /// BARE METAL FIX: Warten bis Reset (Bit 4) fertig ist!
+                _15((portsc & (1 << 4)) == 0) _37; 
+                
+                /// Falls Port Reset Change (Bit 21) gesetzt ist, löschen wir es!
+                _15(portsc & (1 << 21)) {          
+                    mmio_write32(portsc_addr, portsc | (1 << 21)); 
+                    _37; /// Und brechen erfolgreich ab!
                 }
+                
+                /// BARE METAL FIX: Echte Hardware-Verzögerung für den Reset!
+                _39(volatile _43 delay = 0; delay < 1000000; delay++) { asm volatile("nop"); }
                 reset_timeout++;
-                asm volatile("nop");
-            }
+            } asm volatile("nop");
         }
 
         _30 dbg[64];
@@ -509,25 +564,36 @@ _184 xhci_check_ports(uintptr_t op_base, _43 max_ports) {
             /// Wir lesen die Geschwindigkeit des Sticks (Bits 10-13)
             _89 port_speed = (portsc >> 10) & 0x0F;
             
+            str_cpy(cmd_status, "xHCI: ENABLING SLOT...");
             /// 1. Slot anfragen (Tor 1)
             _184 slot_id = xhci_send_enable_slot(); 
             
             /// 2. Gerät taufen (Tor 2)
             _15(slot_id > 0) {
+                str_cpy(cmd_status, "xHCI: ADDRESSING...");
                 xhci_send_address_device(slot_id, i, port_speed);
 				/// BARE METAL FIX: Hier werden die Förderbänder gestartet!
+                str_cpy(cmd_status, "xHCI: CONFIG ENDPOINTS...");
                 xhci_configure_endpoints(slot_id, port_speed);
+                str_cpy(cmd_status, "xHCI: ENDPOINTS DONE!");
             }
             
             found = _128;
-            _96 slot_id; /// Wir haben ihn, Abbruch!
+            
+            /// BARE METAL FIX: Wenn es Speed 3 oder 4 ist, ist es vermutlich der USB Stick!
+            _15(port_speed >= 3) {
+                best_slot = slot_id;
+            } _41 _15(best_slot == 0) {
+                /// Notfall: Wenn wir keinen schnellen Stick finden, nehmen wir den ersten.
+                best_slot = slot_id;
+            }
         }
 	}
     
     _15(!found) {
         str_cpy(hw_usb, "NO DEVICE PLUGGED");
     }
-    _96 0;
+    _96 best_slot;
 }
 
 _184 xhci_send_enable_slot() {
@@ -553,10 +619,11 @@ _184 xhci_send_enable_slot() {
     _96 0; /// Timeout
 }
 _50 xhci_send_address_device(_184 slot_id, _184 port_id, _89 speed) {
-    /// 1. RAM-Fächer für den Stick reservieren
-    _89* out_ctx  = (_89*)0x04060000;
-    _89* in_ctx   = (_89*)0x04070000;
-    _89* ep0_ring = (_89*)0x04080000;
+    /// BARE METAL FIX: Dynamischer Speicher pro Slot (1 MB Abstand), um Kollisionen zu verhindern!
+    uint64_t slot_base = 0x04100000 + (slot_id * 0x100000);
+    _89* out_ctx  = (_89*)(slot_base + 0x00000);
+    _89* in_ctx   = (_89*)(slot_base + 0x10000);
+    _89* ep0_ring = (_89*)(slot_base + 0x20000);
 
     _39(_43 i=0; i<512; i++) { out_ctx[i] = 0; in_ctx[i] = 0; }
     _39(_43 i=0; i<64; i++)  { ep0_ring[i] = 0; }
@@ -572,7 +639,7 @@ _50 xhci_send_address_device(_184 slot_id, _184 port_id, _89 speed) {
 
     /// Endpoint 0 Context (Offset 0x40 = DWORD 16)
     _89 max_packet = (speed EQ 4) ? 512 : 64; /// USB 3.0 = 512, USB 2.0 = 64
-    in_ctx[16 + 1] = (3 << 1) | (4 << 16) | (max_packet << 16); /// CErr=3, Typ=Control
+    in_ctx[16 + 1] = (3 << 1) | (4 << 3) | (max_packet << 16); /// CErr=3, Typ=Control
     
     /// 64-Bit Fix: Ring-Adresse anheften
     in_ctx[16 + 2] = (_89)(uint64_t)ep0_ring | 0x01; 
@@ -615,9 +682,10 @@ extern _89 global_mouse_slot;
 extern _50 xhci_submit_mouse_read();
 
 _50 xhci_configure_endpoints(_184 slot_id, _89 speed) {
-    _89* in_ctx = (_89*)0x04070000;
-    _89* ep_out_ring = (_89*)0x04090000;
-    _89* ep_in_ring  = (_89*)0x040A0000;
+    uint64_t slot_base = 0x04100000 + (slot_id * 0x100000);
+    _89* in_ctx = (_89*)(slot_base + 0x10000);
+    _89* ep_out_ring = (_89*)(slot_base + 0x30000);
+    _89* ep_in_ring  = (_89*)(slot_base + 0x40000);
     _39(_43 i=0; i<256; i++) { ep_out_ring[i] = 0; ep_in_ring[i] = 0; }
     
     in_ctx[0] = 0; 
@@ -635,7 +703,8 @@ _50 xhci_configure_endpoints(_184 slot_id, _89 speed) {
     _15(speed <= 2) { 
         global_mouse_slot = slot_id;
         
-        in_ctx[1] = (1 << 0) | (1 << 1) | (1 << 3); 
+        /// BARE METAL FIX: Add Context Flags! Bit 0 (Slot Context) + Bit 3 (DCI 3 = EP1 IN) setzen!
+        in_ctx[1] = (1 << 0) | (1 << 3); 
         in_ctx[8] = (in_ctx[8] & 0x07FFFFFF) | (3 << 27); 
 
         in_ctx[32 + 0] = (8 << 16); 
@@ -657,15 +726,16 @@ _50 xhci_configure_endpoints(_184 slot_id, _89 speed) {
         ep_in_ring[63 * 4 + 3] = (6 << 10) | 2; 
 
     } _41 {
-        in_ctx[1] = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3);
+        /// BARE METAL FIX: Add Context Flags! Bit 0 (Slot Context) + Bit 2 (DCI 2 = EP1 OUT) + Bit 3 (DCI 3 = EP1 IN) setzen!
+        in_ctx[1] = (1 << 0) | (1 << 2) | (1 << 3);
         in_ctx[8] = (in_ctx[8] & 0x07FFFFFF) | (3 << 27);
         
-        in_ctx[24 + 1] = (3 << 1) | (2 << 16) | (512 << 16); 
+        in_ctx[24 + 1] = (3 << 1) | (2 << 3) | (512 << 16); 
         /// 64-Bit Fix
         in_ctx[24 + 2] = (_89)(uint64_t)ep_out_ring | 0x01;
         in_ctx[24 + 3] = 0; in_ctx[24 + 4] = 8;
         
-        in_ctx[32 + 1] = (3 << 1) | (6 << 16) | (512 << 16);
+        in_ctx[32 + 1] = (3 << 1) | (6 << 3) | (512 << 16);
         /// 64-Bit Fix
         in_ctx[32 + 2] = (_89)(uint64_t)ep_in_ring | 0x01;
         in_ctx[32 + 3] = 0; in_ctx[32 + 4] = 8;
@@ -699,7 +769,7 @@ _50 xhci_configure_endpoints(_184 slot_id, _89 speed) {
                 str_cpy(hw_usb, "ENDPOINTS READY!"); 
                 
                 _15(speed <= 2) { 
-                    uint32_t* ep0_ring = (uint32_t*)0x04080000;
+                    uint32_t* ep0_ring = (uint32_t*)(slot_base + 0x20000);
                     
                     ep0_ring[0] = 0x00000B21; 
                     ep0_ring[1] = 0x00000000; 
@@ -736,13 +806,14 @@ _50 xhci_configure_endpoints(_184 slot_id, _89 speed) {
 /// 1. KAPAZITÄT LESEN (TOR 4)
 /// ==========================================
 extern "C" _43 xhci_bot_get_capacity(_184 slot_id) { // <--- HIER EINGEFÜGT!
-    _89* cbw_ram = (_89*)0x040B0000;
+    uint64_t slot_base = 0x04100000 + (slot_id * 0x100000);
+    _89* cbw_ram = (_89*)(slot_base + 0x50000);
     _39(_43 i=0; i<28; i++) cbw_ram[i] = 0;
     
     cbw_ram[0] = 0x43425355; cbw_ram[1] = 0x02; cbw_ram[2] = 8; cbw_ram[3] = 0x0A000080;
     _184* scsi_cmd = (_184*)(cbw_ram + 3) + 3; scsi_cmd[0] = 0x25;
 
-    volatile XHCI_TRB* out_ring = (volatile XHCI_TRB*)xhci_ep_out_ring;
+    volatile XHCI_TRB* out_ring = (volatile XHCI_TRB*)(slot_base + 0x30000);
     /// 64-Bit Fix
     out_ring[usb_out_idx].param1 = (_89)(uint64_t)cbw_ram; 
     out_ring[usb_out_idx].param2 = 0;
@@ -753,8 +824,8 @@ extern "C" _43 xhci_bot_get_capacity(_184 slot_id) { // <--- HIER EINGEFÜGT!
 
     _39(volatile _43 wait = 0; wait < 1000000; wait++) { asm volatile("nop"); }
 
-    _89* cap_ram = (_89*)0x040C0000;
-    volatile XHCI_TRB* in_ring = (volatile XHCI_TRB*)xhci_ep_in_ring;
+    _89* cap_ram = (_89*)(slot_base + 0x60000);
+    volatile XHCI_TRB* in_ring = (volatile XHCI_TRB*)(slot_base + 0x40000);
     /// 64-Bit Fix
     in_ring[usb_in_idx].param1 = (_89)(uint64_t)cap_ram; 
     in_ring[usb_in_idx].param2 = 0;
@@ -776,7 +847,8 @@ extern "C" _43 xhci_bot_get_capacity(_184 slot_id) { // <--- HIER EINGEFÜGT!
 /// 2. SEKTOREN LESEN (TOR 5)
 /// ==========================================
 _44 xhci_bot_read_sectors(_184 slot_id, uint32_t lba, uint64_t dest_ram) {
-    _89* cbw_ram = (_89*)0x040B0000; _89* csw_ram = (_89*)0x040D0000;
+    uint64_t slot_base = 0x04100000 + (slot_id * 0x100000);
+    _89* cbw_ram = (_89*)(slot_base + 0x50000); _89* csw_ram = (_89*)(slot_base + 0x70000);
     _39(_43 i=0; i<28; i++) { cbw_ram[i] = 0; csw_ram[i] = 0; }
     
     cbw_ram[0] = 0x43425355; cbw_ram[1] = 0x03; cbw_ram[2] = 512; cbw_ram[3] = 0x0A000080;
@@ -784,8 +856,8 @@ _44 xhci_bot_read_sectors(_184 slot_id, uint32_t lba, uint64_t dest_ram) {
     scsi_cmd[2] = (lba >> 24) & 0xFF; scsi_cmd[3] = (lba >> 16) & 0xFF; scsi_cmd[4] = (lba >> 8) & 0xFF; scsi_cmd[5] = lba & 0xFF;
     scsi_cmd[8] = 1; scsi_cmd[9] = 0;
 
-    volatile XHCI_TRB* out_ring = (volatile XHCI_TRB*)xhci_ep_out_ring;
-    volatile XHCI_TRB* in_ring  = (volatile XHCI_TRB*)xhci_ep_in_ring;
+    volatile XHCI_TRB* out_ring = (volatile XHCI_TRB*)(slot_base + 0x30000);
+    volatile XHCI_TRB* in_ring  = (volatile XHCI_TRB*)(slot_base + 0x40000);
 
     /// COMMAND (OUT)
     out_ring[usb_out_idx].param1 = (_89)(uint64_t)cbw_ram; 
@@ -822,7 +894,8 @@ _44 xhci_bot_read_sectors(_184 slot_id, uint32_t lba, uint64_t dest_ram) {
 /// 3. SEKTOREN SCHREIBEN (TOR 6)
 /// ==========================================
 _44 xhci_bot_write_sectors(_184 slot_id, uint32_t lba, uint64_t src_ram) {
-    _89* cbw_ram = (_89*)0x040B0000; _89* csw_ram = (_89*)0x040D0000;
+    uint64_t slot_base = 0x04100000 + (slot_id * 0x100000);
+    _89* cbw_ram = (_89*)(slot_base + 0x50000); _89* csw_ram = (_89*)(slot_base + 0x70000);
     _39(_43 i=0; i<28; i++) { cbw_ram[i] = 0; csw_ram[i] = 0; }
     
     cbw_ram[0] = 0x43425355; cbw_ram[1] = 0x04; cbw_ram[2] = 512; cbw_ram[3] = 0x0A000000; /// OUT!
@@ -830,8 +903,8 @@ _44 xhci_bot_write_sectors(_184 slot_id, uint32_t lba, uint64_t src_ram) {
     scsi_cmd[2] = (lba >> 24) & 0xFF; scsi_cmd[3] = (lba >> 16) & 0xFF; scsi_cmd[4] = (lba >> 8) & 0xFF; scsi_cmd[5] = lba & 0xFF;
     scsi_cmd[8] = 1; scsi_cmd[9] = 0;
 
-    volatile XHCI_TRB* out_ring = (volatile XHCI_TRB*)xhci_ep_out_ring;
-    volatile XHCI_TRB* in_ring  = (volatile XHCI_TRB*)xhci_ep_in_ring;
+    volatile XHCI_TRB* out_ring = (volatile XHCI_TRB*)(slot_base + 0x30000);
+    volatile XHCI_TRB* in_ring  = (volatile XHCI_TRB*)(slot_base + 0x40000);
 
     /// COMMAND (OUT)
     out_ring[usb_out_idx].param1 = (_89)(uint64_t)cbw_ram; 
@@ -997,6 +1070,7 @@ _50 pci_scan_all() {
                             _15(vendor EQ 0x10EC) { str_cpy(found_nics[nic_count].name, "REALTEK"); found_nics[nic_count].type=1; } 
                             _41 _15(vendor EQ 0x8086) { str_cpy(found_nics[nic_count].name, "INTEL"); found_nics[nic_count].type=2; } 
                             _41 { str_cpy(found_nics[nic_count].name, "GENERIC"); found_nics[nic_count].type=0; }
+                            found_nics[nic_count].device_id = device_id;
                             nic_count++; 
                         } 
                     }
@@ -1019,41 +1093,41 @@ _50 pci_scan_all() {
                             static int xhci_discovery_count = 0;
                             xhci_discovery_count++;
 
-                            _15(vendor EQ 0x8086) {
-                                /// 1. Aufwachen (D0 State)
-                                _184 cap_ptr = pci_read(bus, dev, func, 0x34) & 0xFF;
-                                _39(_43 steps = 0; steps < 10 AND cap_ptr NEQ 0; steps++) {
-                                    _89 cap_reg = pci_read(bus, dev, func, cap_ptr);
-                                    _15((cap_reg & 0xFF) EQ 0x01) { 
-                                        _89 pmcsr = pci_read(bus, dev, func, cap_ptr + 4);
-                                        pci_write(bus, dev, func, cap_ptr + 4, pmcsr & 0xFFFFFFFC);
-                                        _39(volatile _43 wait = 0; wait < 10000000; wait++) { asm volatile("nop"); }
-                                        _37; 
-                                    }
-                                    cap_ptr = (cap_reg >> 8) & 0xFF;
+                            /// BARE METAL FIX: Alle Controller aufwachen und MMIO aktivieren, nicht nur Intel!
+                            /// 1. Aufwachen (D0 State) über Power Management Capability (0x01)
+                            _184 cap_ptr = pci_read(bus, dev, func, 0x34) & 0xFF;
+                            _39(_43 steps = 0; steps < 10 AND cap_ptr NEQ 0; steps++) {
+                                _89 cap_reg = pci_read(bus, dev, func, cap_ptr);
+                                _15((cap_reg & 0xFF) EQ 0x01) { 
+                                    _89 pmcsr = pci_read(bus, dev, func, cap_ptr + 4);
+                                    pci_write(bus, dev, func, cap_ptr + 4, pmcsr & 0xFFFFFFFC);
+                                    _39(volatile _43 wait = 0; wait < 10000000; wait++) { asm volatile("nop"); }
+                                    _37; 
                                 }
+                                cap_ptr = (cap_reg >> 8) & 0xFF;
+                            }
+                            
+                            /// 2. Rechte (Memory & Bus Master) UND alte Interrupts blockieren (0x0406)
+                            _89 cmd_reg = pci_read(bus, dev, func, 0x04);
+                            pci_write(bus, dev, func, 0x04, cmd_reg | 0x0406);
+                            
+                            /// 3. HIER ENTSCHÄRFEN WIR DIE MODERNE MSI-BOMBE VORHER!
+                            _184 cap_ptr_msi = pci_read(bus, dev, func, 0x34) & 0xFF;
+                            _39(_43 steps = 0; steps < 10 AND cap_ptr_msi NEQ 0; steps++) {
+                                _89 cap_reg = pci_read(bus, dev, func, cap_ptr_msi);
+                                _184 cap_id = cap_reg & 0xFF;
                                 
-                                /// 2. Rechte (Memory & Bus Master) UND alte Interrupts blockieren (0x0406 statt 0x06)
-								_89 cmd_reg = pci_read(bus, dev, func, 0x04);
-								pci_write(bus, dev, func, 0x04, cmd_reg | 0x0406);
-								
-								/// HIER ENTSCHÄRFEN WIR DIE MODERNE MSI-BOMBE VORHER!
-								_184 cap_ptr_msi = pci_read(bus, dev, func, 0x34) & 0xFF;
-								_39(_43 steps = 0; steps < 10 AND cap_ptr_msi NEQ 0; steps++) {
-									_89 cap_reg = pci_read(bus, dev, func, cap_ptr_msi);
-									_184 cap_id = cap_reg & 0xFF;
-									
-									_15(cap_id EQ 0x05) { /// MSI gefunden -> Abschalten!
-										_89 msi_ctrl = pci_read(bus, dev, func, cap_ptr_msi);
-										pci_write(bus, dev, func, cap_ptr_msi, msi_ctrl & ~0x00010000);
-									} _41 _15(cap_id EQ 0x11) { /// MSI-X gefunden -> Abschalten!
-										_89 msix_ctrl = pci_read(bus, dev, func, cap_ptr_msi);
-										pci_write(bus, dev, func, cap_ptr_msi, msix_ctrl & ~0x80000000);
-									}
-									cap_ptr_msi = (cap_reg >> 8) & 0xFF;
-								}
+                                _15(cap_id EQ 0x05) { /// MSI gefunden -> Abschalten!
+                                    _89 msi_ctrl = pci_read(bus, dev, func, cap_ptr_msi);
+                                    pci_write(bus, dev, func, cap_ptr_msi, msi_ctrl & ~0x00010000);
+                                } _41 _15(cap_id EQ 0x11) { /// MSI-X gefunden -> Abschalten!
+                                    _89 msix_ctrl = pci_read(bus, dev, func, cap_ptr_msi);
+                                    pci_write(bus, dev, func, cap_ptr_msi, msix_ctrl & ~0x80000000);
+                                }
+                                cap_ptr_msi = (cap_reg >> 8) & 0xFF;
+                            }
                                 
-                                /// 3. Adresse (BAR0 + BAR1) komplett lesen
+                            /// 4. Adresse (BAR0 + BAR1) komplett lesen
                                 _89 bar0 = pci_read(bus, dev, func, 0x10);
                                 uint32_t clean_bar0 = bar0 & 0xFFFFFFF0;
                                 
@@ -1065,8 +1139,10 @@ _50 pci_scan_all() {
                                     full_bar = ((uint64_t)bar1 << 32) | clean_bar0;
                                 }
                                 
-                                /// WIR IGNORIEREN NIEMANDEN MEHR!
-                                if (full_bar != 0) {
+                                /// BARE METAL FIX: Nur den ERSTEN xHCI Controller proben!
+                                /// Auf echten PCs gibt es oft 2-3 xHCI Controller.
+                                /// Der zweite Probe zerstört den State des ersten!
+                                if (full_bar != 0 && global_xhci_base_addr == 0) {
                                     /// Wir übergeben BAR0 an unsere Diagnose-Sonde
                                     int result = init_xhci_probe(full_bar, xhci_discovery_count);
                                     
@@ -1075,7 +1151,6 @@ _50 pci_scan_all() {
                                         // Der "Auserwählte" wurde gefunden
                                     }
                                 }
-                            }
                         }
                     }
 

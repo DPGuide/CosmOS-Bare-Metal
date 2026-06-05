@@ -38,7 +38,8 @@ extern uintptr_t xhci_db_base;
 void xhci_submit_mouse_read() {
     if (global_mouse_slot == 0) return;
     
-    volatile uint32_t* in_ring = (volatile uint32_t*)0x040A0000;
+    uint64_t slot_base = 0x04100000 + (global_mouse_slot * 0x100000);
+    volatile uint32_t* in_ring = (volatile uint32_t*)(slot_base + 0x40000);
     
     /// BARE METAL FIX: Puffer Adresse ist jetzt 64-Bit!
     uint64_t buffer_addr = 0x06500000 + (mouse_trb_idx * 8);
@@ -132,7 +133,7 @@ extern uint8_t xhci_check_ports(uintptr_t op_base, int max_ports);
 extern "C" uint32_t xhci_bot_get_capacity(uint8_t slot_id);
 
 void init_xhci(uint32_t bar0) {}
-extern _50 xhci_bios_handoff(_89 cap_base);
+extern _50 xhci_bios_handoff(uintptr_t cap_base);
 
 extern void map_mmio_64(uint64_t phys_addr);
 
@@ -313,16 +314,36 @@ void xhci_poll_events_and_mouse() {
                     uint64_t mouse_buf_addr = ((uint64_t)transfer_trb[1] << 32) | transfer_trb[0];
                     volatile uint8_t* mouse_buf = (volatile uint8_t*)mouse_buf_addr; 
                     
-                    int btn = 0; int dx = 0; int dy = 0;
-                    
-                    if (mouse_buf[0] == 1 && bytes_read >= 4) {
-                        btn = mouse_buf[1]; dx = (int8_t)mouse_buf[2]; dy = (int8_t)mouse_buf[3];
+                    /// BARE METAL FIX: Unterscheiden zwischen USB Maus und USB Tastatur!
+                    /// Boot-Protokoll: Tastaturen senden immer 8 Bytes, Byte 1 ist 0.
+                    if (bytes_read == 8 && mouse_buf[1] == 0) {
+                        uint8_t usb_key = mouse_buf[2];
+                        if (usb_key >= 0x04 && usb_key <= 0x38) {
+#ifdef __x86_64__
+                            extern uint8_t key_scancode;
+                            extern bool key_ready;
+                            static const uint8_t u2p[60] = {
+                                0,0,0,0,30,48,46,32,18,33,34,35,23,36,37,38,
+                                50,49,24,25,16,19,31,20,22,47,17,45,21,44,2,3,
+                                4,5,6,7,8,9,10,11,28,1,14,15,57,12,13,26,
+                                27,43,0,39,40,41,51,52,53,54,55,58
+                            };
+                            if (usb_key < 60) {
+                                key_scancode = u2p[usb_key];
+                                if (key_scancode != 0) key_ready = true;
+                            }
+#endif
+                        }
                     } else {
-                        btn = mouse_buf[0]; dx = (int8_t)mouse_buf[1]; dy = (int8_t)mouse_buf[2];
+                        int btn = 0; int dx = 0; int dy = 0;
+                        if (mouse_buf[0] == 1 && bytes_read >= 4) {
+                            btn = mouse_buf[1]; dx = (int8_t)mouse_buf[2]; dy = (int8_t)mouse_buf[3];
+                        } else {
+                            btn = mouse_buf[0]; dx = (int8_t)mouse_buf[1]; dy = (int8_t)mouse_buf[2];
+                        }
+                        total_dx += dx; total_dy += dy; final_btn |= btn; 
+                        has_update = true;
                     }
-                    
-                    total_dx += dx; total_dy += dy; final_btn |= btn; 
-                    has_update = true;
                     xhci_submit_mouse_read();
                 }
             } 
@@ -371,24 +392,41 @@ extern "C" _50 usb_scan_and_mount() {
     _43 usb_found = 0;
     
     debug_print("USB: Scan and mount started.");
-    /// BARE METAL FIX: xHCI (USB 3.0) SCAN FIRST
-    _15(global_xhci_base_addr NEQ 0 AND drive_count < 8) {
+    
+    /// =======================================================
+    /// BARE METAL FIX: xHCI DEAKTIVIERT (MAUS & TASTATUR SCHUTZ)
+    /// =======================================================
+    /// Du hast recht! Wenn wir den xHCI Controller übernehmen (Handoff) 
+    /// oder resetten, beendet das BIOS sofort die Legacy-Emulation für 
+    /// deine USB-Maus und Tastatur (sie verlieren den Strom).
+    /// Da wir im Moment noch keinen eigenen xHCI HID-Treiber haben,
+    /// lassen wir das BIOS einfach in Ruhe! Wir scannen nur USB 2.0 (UHCI).
+    _15(0 /*global_xhci_base_addr NEQ 0 AND drive_count < 8*/) {
         uint8_t caplength = *((volatile uint8_t*)global_xhci_base_addr);
         uintptr_t op_base = global_xhci_base_addr + caplength;
         
         debug_print("USB: Found global_xhci_base_addr.");
         
-        extern _50 xhci_init_controller(_89 op_base);
+        extern _50 xhci_init_controller(uintptr_t op_base);
         xhci_init_controller(op_base);
         
-        str_cpy(cmd_status, "xHCI: POWERING PORTS...");
-        xhci_power_on_ports(op_base, 8); 
+        /// BARE METAL FIX: Lese die echte Anzahl der Ports aus den xHCI Capabilities (HCSPARAMS1)
+        uint32_t hcsparams1 = *((volatile uint32_t*)(global_xhci_base_addr + 0x04));
+        uint32_t max_ports = (hcsparams1 >> 24) & 0xFF;
+        _15(max_ports EQ 0 OR max_ports > 32) {
+            max_ports = 16; /// Sichere Obergrenze / Fallback falls ungültig
+        }
         
-        str_cpy(cmd_status, "xHCI: SCANNING PORTS...");
+        str_cpy(cmd_status, "xHCI: POWERING ALL PORTS...");
+        xhci_power_on_ports(op_base, max_ports); 
+        
+        /// BARE METAL FIX: USB-Sticks brauchen auf echtem Silizium 200ms+ zum Aufwachen!
+        _39(volatile _43 hw_wait = 0; hw_wait < 50000000; hw_wait++) { __asm__ _192("nop"); }
+        
+        str_cpy(cmd_status, "xHCI: SCANNING ALL PORTS...");
         debug_print("USB: Calling xhci_check_ports...");
-        uint8_t slot_id = xhci_check_ports(op_base, 8);
+        uint8_t slot_id = xhci_check_ports(op_base, max_ports);
 
-        
         _15(slot_id > 0) {
             str_cpy(cmd_status, "xHCI: READING CAPACITY...");
             _43 size_mb = xhci_bot_get_capacity(slot_id);
@@ -437,9 +475,9 @@ extern "C" _50 usb_scan_and_mount() {
                         _15(size_mb > 0) {
                             /// Only add to list on full success
                             drives[drive_count].size_mb = size_mb;
-                            drives[drive_count].type = 3; 
+                            drives[drive_count].type = 4; /// Type 4 = UHCI
                             drives[drive_count].base_port = dev_addr;
-                            str_cpy(drives[drive_count].model, "USB FLASH DRIVE");
+                            str_cpy(drives[drive_count].model, "USB 1.1 FLASH DRIVE");
                             drive_count++;
                             usb_found++;
                         }

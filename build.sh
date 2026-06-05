@@ -68,13 +68,14 @@ g++ -m64 -mno-red-zone -O2 -c cosmos_cfs.cpp -o cosmos_cfs_64.o -ffreestanding -
 g++ -m64 -mno-red-zone -O2 -c cosmos_usb.cpp -o cosmos_usb_64.o -ffreestanding -fno-exceptions -fno-rtti -fpermissive -Wno-int-to-pointer-cast
 g++ -m64 -mno-red-zone -O2 -c cosmos_hda.cpp -o cosmos_hda_64.o -ffreestanding -fno-exceptions -fno-rtti -fpermissive -Wno-int-to-pointer-cast
 g++ -m64 -mno-red-zone -O2 -c arcade.cpp -o arcade.o -ffreestanding -fno-exceptions -fno-rtti -Wno-int-to-pointer-cast
+g++ -m64 -mno-red-zone -O2 -c stb_wrapper.cpp -o stb_wrapper.o -ffreestanding -fno-exceptions -fno-rtti -fpermissive -Wno-int-to-pointer-cast
 g++ -m64 -mno-red-zone -O2 -c cosmos_partition.cpp -o cosmos_partition_64.o -ffreestanding -fno-exceptions -fno-rtti -fpermissive -Wno-int-to-pointer-cast
 g++ -m64 -mno-red-zone -O2 -c cosmos_fat32.cpp -o cosmos_fat32_64.o -ffreestanding -fno-exceptions -fno-rtti -fpermissive -Wno-int-to-pointer-cast
 g++ -m64 -mno-red-zone -O2 -c memory.cpp -o memory_64.o -ffreestanding -fno-exceptions -fno-rtti -fpermissive -Wno-int-to-pointer-cast
 
 echo "------------------------------------------"
 echo "4. Linke OS2 (Die flache KERNEL.BIN)..."
-ld -m elf_x86_64 -T linker64.ld -z noexecstack --allow-multiple-definition os2_entry.o kernel_main_64.o kernel_64.o pci_64.o net_64.o cosmos_bytes_64.o cosmos_fs_64.o cosmos_tba_64.o cosmos_ahci_64.o cosmos_cfs_64.o cosmos_usb_64.o cosmos_hda_64.o arcade.o cosmos_partition_64.o cosmos_fat32_64.o memory_64.o -o kernel_main.elf
+ld -m elf_x86_64 -T linker64.ld -z noexecstack --allow-multiple-definition os2_entry.o kernel_main_64.o kernel_64.o pci_64.o net_64.o cosmos_bytes_64.o cosmos_fs_64.o cosmos_tba_64.o cosmos_ahci_64.o cosmos_cfs_64.o cosmos_usb_64.o cosmos_hda_64.o arcade.o stb_wrapper.o cosmos_partition_64.o cosmos_fat32_64.o memory_64.o -o kernel_main.elf
 
 objcopy -O binary kernel_main.elf isodir/KERNEL.BIN
 

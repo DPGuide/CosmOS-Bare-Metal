@@ -5,11 +5,12 @@
 /// BARE METAL FIX: DIE HARTEN DMA-ZONEN FÜR INTEL & RTL
 /// ========================================================
 #ifdef __x86_64__
-    /// OS2 (64-BIT): Wir zwingen die Intel-Ringe auf die absolut sichere 14-Megabyte-Marke!
-    #define e1000_rx_ring    ((volatile unsigned int*)0x00E00000)
-    #define e1000_tx_ring    ((volatile unsigned int*)0x00E10000)
-    #define e1000_rx_buffers ((volatile unsigned char (*)[4096])0x00E20000)
-    #define e1000_tx_buffers ((volatile unsigned char (*)[4096])0x00E40000)
+    /// OS2 (64-BIT): Wir zwingen die Intel-Ringe auf die absolut sichere 256-Megabyte-Marke!
+    /// (14 MB war historisch oft durch BIOS oder Intel ME reserviert -> DMA Abort/Freeze!)
+    #define e1000_rx_ring    ((volatile unsigned int*)0x10000000)
+    #define e1000_tx_ring    ((volatile unsigned int*)0x10010000)
+    #define e1000_rx_buffers ((volatile unsigned char (*)[4096])0x10020000)
+    #define e1000_tx_buffers ((volatile unsigned char (*)[4096])0x10040000)
 #else
     /// OS1 (32-BIT): Der alte Compiler macht das wie gewohnt.
     __attribute__((aligned(4096))) unsigned int e1000_rx_ring[32 * 4];
@@ -23,6 +24,9 @@ _184 global_ip_buf[1514];
 _172 _89 mmio_read32(uintptr_t addr);
 _172 _50 mmio_write32(uintptr_t addr, _89 val);
 _172 _50 tba_master_stream(_184* network_payload);
+#ifdef __x86_64__
+_172 _50 map_mmio_64(uint64_t phys_addr);
+#endif
 /// --- PROTOTYPEN ---
 _50 e1000_enable_rx();
 _50 e1000_enable_tx();
@@ -39,6 +43,7 @@ _172 _89 intel_mem_base;
 /// --- GLOBALE NETZWERK-ZÄHLER ---
 _43 rx_cur_intel = 0;
 _43 tx_cur_intel = 0;
+_44 is_modern_intel = 0;
 _172 _184 mac_addr[6];
 _172 _30 mac_str[24];
 #ifdef __x86_64__
@@ -47,7 +52,7 @@ _172 _30 mac_str[24];
     /// ==========================================
     _184* tx_buffer     = (_184*)0x00C10000; 
     _184* rx_buffer_rtl = (_184*)0x00C00000; 
-    _30 ip_address[32]  = "0.0.0.0 (OFFLINE)";
+    _30 ip_address[32]  = "10.0.2.15";
 #else
     /// ==========================================
     /// OS1 (32-BIT): kernel.cpp ist der Chef, net.cpp ist nur Gast (_172)
@@ -63,10 +68,31 @@ extern void str_cat(char* dest, const char* src);
 
 extern char cmd_status[256];
 _30 net_mask[32] = "255.255.255.0";
-_30 gateway_ip[32] = "0.0.0.0";
+_30 gateway_ip[32] = "10.0.2.2";
+_30 dns_ip[32] = "8.8.8.8";
+_184 router_mac[6] = {0, 0, 0, 0, 0, 0};
 _172 _30 cmd_last_out[128];
 _172 NICInfo found_nics[5];
 _172 _43 active_nic_idx;
+#ifdef __x86_64__
+extern _30 browser_content[65536];
+extern _30 browser_url[512];
+extern _184 browser_download_buffer[3000000];
+extern _43 browser_download_len;
+extern _43 browser_content_length;
+extern _44 browser_download_complete;
+extern _44 pkg_download_active;
+extern "C" void parse_html();
+#else
+_30 browser_content[65536];
+_30 browser_url[512];
+_184 browser_download_buffer[3000000];
+_43 browser_download_len = 0;
+_43 browser_content_length = 0;
+_44 browser_download_complete = 0;
+_44 pkg_download_active = 0;
+#endif
+TCPSocket browser_tcp = {0, 0, 0, 0, 0, 0};
 _172 _44 str_starts(_71 _30* s1, _71 _30* s2);
 _172 _89 random();
 _172 _182 chk(_50* d, _43 l);
@@ -134,14 +160,19 @@ _50 net_raw(_50* d, _89 l) {
         _39(_89 i=0;i<l;i++) tx_buffer[i]=((_184*)d)[i];
         outl(rtl_io_base+0x20+(tx_cur*4),(_89)(uintptr_t)tx_buffer); 
         outl(rtl_io_base+0x10+(tx_cur*4),l);
+        tx_cur = (tx_cur + 1) % 4; /// BARE METAL FIX: Niemals denselben Descriptor direkt überschreiben!
         str_cpy(cmd_status, "RTL: NATIVE TX FIRED!");
     }
     _15(intel_mem_base > 0) {
+        /// BARE METAL FIX: Niemals den Sendevorgang blockieren, nur weil der Link 
+        /// "angeblich" noch down ist! Wir legen die Pakete einfach in den Puffer, 
+        /// die Hardware sendet sie automatisch, sobald das Kabel bereit ist!
         _89 mac_status = mmio_read32(intel_mem_base + 0x0008);
         _15((mac_status & 0x02) EQ 0) {
-            str_cpy(cmd_status, "INTEL ERR: LINK DOWN (WAIT!)");
-            _96; 
+            /// Wir geben nur einen Hinweis, aber brechen NICHT ab!
+            str_cpy(cmd_status, "INTEL: QUEUED (LINK DOWN?)");
         }
+
         /// Den legalen RAM-Bereich für das aktuelle Paket holen
         _184* target_buf = (_184*)e1000_tx_buffers[tx_cur_intel];
         _39(_89 i = 0; i < l; i++) target_buf[i] = ((_184*)d)[i];
@@ -152,19 +183,27 @@ _50 net_raw(_50* d, _89 l) {
             send_len = 60;
         }
 
-        volatile unsigned int* dma_desc = (volatile unsigned int*)&e1000_tx_ring[tx_cur_intel * 4];
+        uint64_t phys_buf = (uint64_t)target_buf;
         
-        /// Hier ebenfalls den Cast-Trick anwenden
-		uint64_t phys_buf = (uint64_t)&e1000_tx_buffers[tx_cur_intel][0];
-        dma_desc[0] = (uint32_t)(phys_buf & 0xFFFFFFFF);
-        dma_desc[1] = (uint32_t)((phys_buf >> 32) & 0xFFFFFFFF);
-        dma_desc[2] = send_len | 0x0B000000; 
-        dma_desc[3] = 0; 
+        volatile unsigned int* wait_desc;
         
-        /// Cache zwingend leeren!
+        /// Wir verwenden ÜBERALL den Legacy Descriptor (Genau wie in QEMU!)
+        /// Das zwingt die Bare-Metal-Karte, sich genau wie QEMU zu verhalten.
+        _89* leg_desc = (_89*)&e1000_tx_ring[tx_cur_intel * 4];
+        leg_desc[0] = (uint32_t)(phys_buf & 0xFFFFFFFF);
+        leg_desc[1] = (uint32_t)((phys_buf >> 32) & 0xFFFFFFFF);
+        leg_desc[2] = send_len | 0x0B000000; /// EOP, IFCS, RS
+        leg_desc[3] = 0;
+        
+        wait_desc = (volatile unsigned int*)leg_desc;
+        tx_cur_intel = (tx_cur_intel + 1) % 32;
+
+        
+        /// BARE METAL FIX: wbinvd WIEDERHERGESTELLT! 
+        /// Ohne diesen Flush crasht x32 (da BSS Write-Back ist) und x64 
+        /// verschluckt sich an MTRR-Konflikten (Hardware liest leere RAM-Adressen)!
         __asm__ _192("wbinvd" ::: "memory");
         
-        tx_cur_intel = (tx_cur_intel + 1) % 32;
         mmio_write32(intel_mem_base + 0x3818, tx_cur_intel);
         
         /// =======================================================
@@ -173,9 +212,9 @@ _50 net_raw(_50* d, _89 l) {
         _44 tx_done = _86; 
         _39(_89 wait = 0; wait < 1500000; wait++) {
             /// BARE METAL FIX: Zwinge die CPU, den echten RAM zu lesen!
-            __asm__ _192("clflush (%0)" :: "r"(&dma_desc[3]));
+            __asm__ _192("clflush (%0)" :: "r"(&wait_desc[3]));
             
-            _15((dma_desc[3] & 0x01) NEQ 0) { 
+            _15((wait_desc[3] & 0x01) NEQ 0) { 
                 tx_done = _128; 
                 _96; 
             }
@@ -189,19 +228,46 @@ _50 net_raw(_50* d, _89 l) {
         }
 	}
 }
+/// ==========================================
+/// BARE METAL FIX: IP STRING ZU UINT32 KONVERTER
+/// ==========================================
+_89 ip_str_to_u32(_71 _30* ip_str) {
+    _89 result = 0;
+    _89 octet = 0;
+    _43 shift = 24;
+    _114(*ip_str) {
+        _15(*ip_str EQ '.') {
+            result |= (octet << shift);
+            shift -= 8;
+            octet = 0;
+        } _41 _15(*ip_str >= '0' AND *ip_str <= '9') {
+            octet = octet * 10 + (*ip_str - '0');
+        } _41 {
+            _37;
+        }
+        ip_str++;
+    }
+    result |= (octet << shift);
+    _96 result;
+}
 _50 net_ip(_89 dst, _50* p_data, _182 p_len, _184 proto) {
     /// BARE METAL FIX: Roher RAM (32 MB) - Kein Stack, keine BSS-Sektion!
     _184* b = global_ip_buf;
     EthernetFrame* e=(EthernetFrame*)b; 
     IPHeader* i=(IPHeader*)(b+14);
     
-    _39(_43 k=0;k<6;k++){e->dest_mac[k]=0xFF; e->src_mac[k]=mac_addr[k];} 
+    _89 my_ip = ip_str_to_u32(ip_address);
+    _39(_43 k=0;k<6;k++){
+        _15(dst EQ 0xFFFFFFFF) e->dest_mac[k]=0xFF; 
+        _41 e->dest_mac[k]=router_mac[k];
+        e->src_mac[k]=mac_addr[k];
+    }
     e->type=hs(0x0800);
     
     i->ver_ihl=0x45; i->len=hs(20+p_len); i->id=hs(random()); i->frag=hs(0x4000);
     i->ttl=64; i->proto=proto;
     _15(dst EQ 0xFFFFFFFF) i->src = 0; 
-    _41 i->src = hl(0x0A00020F);
+    _41 i->src = hl(ip_str_to_u32(ip_address));
     i->dst=hl(dst);
     
     /// =========================================================
@@ -311,13 +377,17 @@ extern "C" _50 send_arp_ping() {
     frame[16] = 0x08; frame[17] = 0x00; /// IPv4
     frame[18] = 0x06; frame[19] = 0x04; /// HW len=6, Proto len=4
     frame[20] = 0x00; frame[21] = 0x01; /// Opcode: 1 (Request)
-   /// 3. Sender MAC & Dummy IP (Wir tun so, als wären wir die .99)
+   /// 3. Sender MAC & IP (BARE METAL FIX: Echte IP verwenden!)
     _39(_43 i = 0; i < 6; i++) frame[22+i] = mac_addr[i]; 
-    frame[28] = 192; frame[29] = 168; frame[30] = 14; frame[31] = 99; 
+    _89 my_ip = ip_str_to_u32(ip_address);
+    frame[28] = (my_ip >> 24) & 0xFF; frame[29] = (my_ip >> 16) & 0xFF;
+    frame[30] = (my_ip >> 8) & 0xFF; frame[31] = my_ip & 0xFF;
     
-    /// 4. Target MAC (Null) & Target IP (Die 14.14 - Deine FritzBox!)
+    /// 4. Target MAC (Null) & Target IP (BARE METAL FIX: Gateway aus DHCP!)
     _39(_43 i = 0; i < 6; i++) frame[32+i] = 0x00; 
-    frame[38] = 192; frame[39] = 168; frame[40] = 14; frame[41] = 14;
+    _89 gw_ip = ip_str_to_u32(gateway_ip);
+    frame[38] = (gw_ip >> 24) & 0xFF; frame[39] = (gw_ip >> 16) & 0xFF;
+    frame[40] = (gw_ip >> 8) & 0xFF; frame[41] = gw_ip & 0xFF;
     /// Ab dafür!
     net_raw(frame, 60);
 }
@@ -373,16 +443,17 @@ _50 send_udp_raw(_89 ip, _182 p_src, _182 p_dst, _184* payload, _182 payload_len
         sum += 0xFFFF; 
         sum += 0xFFFF;
     } _41 {
-        /// Fallback (Spiegelt net_ip wider)
-        sum += 0x0A00; 
-        sum += 0x020F;
+        /// BARE METAL FIX: Echte lokale IP verwenden (nicht QEMU 10.0.2.15)!
+        _89 src_ip = ip_str_to_u32(ip_address);
+        sum += (src_ip >> 16) & 0xFFFF; 
+        sum += src_ip & 0xFFFF;
         sum += (ip >> 16) & 0xFFFF; 
         sum += ip & 0xFFFF;         
     }
     
-    /// 2. Pseudo-Header: Protocol (17) und UDP-Länge
+    /// 2. Pseudo-Header: Protocol & Length
     sum += 17; 
-    sum += (8 + payload_len); 
+    sum += (payload_len + 8); 
     
     /// 3. UDP Header & Payload summieren
     _43 total_udp_len = 8 + payload_len;
@@ -404,42 +475,194 @@ _50 send_udp_raw(_89 ip, _182 p_src, _182 p_dst, _184* payload, _182 payload_len
 
     net_ip(ip, pl, 8 + payload_len, 17);
 }
-_50 send_tcp_syn(_89 ip, _182 port) {
-    _184 pl[64]; TCPHeader* t=(TCPHeader*)pl;
-    t->src=hs(49152); t->dst=hs(port); t->seq=hl(random()); t->ack=0;
-    t->off=0x50; t->flg=0x02; t->win=hs(8192); t->chk=0; t->urg=0;
-    net_ip(ip, pl, 20, 6);
-    str_cpy(cmd_status, "TCP: SYN SENT");
-}
-_50 send_tcp_ack(_89 ip, _182 p_src, _182 p_dst, _89 seq, _89 ack_num) {
-    _184 pl[64]; TCPHeader* t = (TCPHeader*)pl;
+_50 send_tcp_payload(_89 ip, _182 p_src, _182 p_dst, _89 seq, _89 ack_num, _184 flags, _184* payload, _182 payload_len) {
+    _184 pl[1500]; 
+    TCPHeader* t = (TCPHeader*)pl;
     t->src = hs(p_src); 
     t->dst = hs(p_dst); 
     t->seq = hl(seq); 
     t->ack = hl(ack_num);
     t->off = 0x50; 
-    t->flg = 0x10;
+    t->flg = flags;
     t->win = hs(8192); 
     t->chk = 0; 
     t->urg = 0;
-    net_ip(ip, pl, 20, 6);
-    str_cpy(cmd_status, "TCP: CONNECTED (ACK)");
+    
+    _39(_43 k=0; k < payload_len; k++) {
+        pl[20 + k] = payload[k];
+    }
+    
+    _89 sum = 0;
+    _89 src_ip = ip_str_to_u32(ip_address);
+    sum += (src_ip >> 16) & 0xFFFF; sum += src_ip & 0xFFFF;
+    sum += (ip >> 16) & 0xFFFF;     sum += ip & 0xFFFF;         
+    sum += 6; 
+    sum += (20 + payload_len); 
+    
+    _43 total_tcp_len = 20 + payload_len;
+    _184* tcp_bytes = (_184*)pl;
+    _39(_43 j = 0; j < total_tcp_len; j += 2) {
+        _182 word = (tcp_bytes[j] << 8);
+        _15(j + 1 < total_tcp_len) word |= tcp_bytes[j + 1];
+        sum += word;
+    }
+    
+    _114(sum >> 16) sum = (sum & 0xFFFF) + (sum >> 16);
+    _182 final_sum = ~sum;
+    t->chk = ((final_sum >> 8) & 0xFF) | ((final_sum << 8) & 0xFF00);
+
+    net_ip(ip, pl, total_tcp_len, 6);
+}
+
+_50 send_tcp_syn(_89 ip, _182 port) {
+    _44 has_mac = _86;
+    _39(_43 k=0; k<6; k++) _15(router_mac[k] NEQ 0) has_mac = _128;
+    _15(!has_mac) {
+        send_arp_ping();
+        str_cpy(cmd_status, "WAITING FOR ARP... TRY AGAIN!");
+        str_cpy(browser_content, "ARP IS MISSING!\nWAIT 1 SEC AND PRESS ENTER AGAIN!\n");
+        _96;
+    }
+
+    browser_tcp.state = 1;
+    browser_tcp.remote_ip = ip;
+    browser_tcp.remote_port = port;
+    browser_tcp.local_port = 49152 + (random() % 1000);
+    browser_tcp.my_seq = random();
+    browser_tcp.my_ack = 0;
+    
+    /// DIAGNOSTIK: TX Counter VOR dem Senden
+    _89 tx_before = 0;
+    _89 rx_before = 0;
+    _89 link_status = 0;
+    _15(intel_mem_base > 0) {
+        tx_before = mmio_read32(intel_mem_base + 0x40D4);
+        rx_before = mmio_read32(intel_mem_base + 0x40D0);
+        link_status = mmio_read32(intel_mem_base + 0x0008);
+    }
+    
+    send_tcp_payload(ip, browser_tcp.local_port, port, browser_tcp.my_seq, 0, 0x02, 0, 0);
+    
+    /// DIAGNOSTIK: TX Counter NACH dem Senden
+    _89 tx_after = 0;
+    _89 rx_after = 0;
+    _15(intel_mem_base > 0) {
+        tx_after = mmio_read32(intel_mem_base + 0x40D4);
+        rx_after = mmio_read32(intel_mem_base + 0x40D0);
+    }
+    
+    /// Alles in browser_content dumpen
+    str_cpy(browser_content, "=== TCP SYN DIAGNOSTIK ===\n");
+    
+    /// Link Status
+    str_cat(browser_content, "LINK STATUS: ");
+    _30 hex_ls[12]; int_to_str(link_status, hex_ls);
+    str_cat(browser_content, hex_ls);
+    str_cat(browser_content, "\nSPEED: ");
+    _43 speed = (link_status >> 6) & 3;
+    _15(speed EQ 0) str_cat(browser_content, "10 MBIT");
+    _41 _15(speed EQ 1) str_cat(browser_content, "100 MBIT");
+    _41 _15(speed EQ 2) str_cat(browser_content, "1000 MBIT");
+    _41 str_cat(browser_content, "UNKNOWN");
+    str_cat(browser_content, " | DUPLEX: ");
+    _15(link_status & 1) str_cat(browser_content, "FULL");
+    _41 str_cat(browser_content, "HALF");
+    str_cat(browser_content, " | LINK: ");
+    _15(link_status & 2) str_cat(browser_content, "UP");
+    _41 str_cat(browser_content, "DOWN");
+    
+    /// TX Counter
+    str_cat(browser_content, "\nTX BEFORE: ");
+    _30 tb[12]; int_to_str(tx_before, tb);
+    str_cat(browser_content, tb);
+    str_cat(browser_content, " | TX AFTER: ");
+    _30 ta[12]; int_to_str(tx_after, ta);
+    str_cat(browser_content, ta);
+    
+    /// RX Counter
+    str_cat(browser_content, "\nRX BEFORE: ");
+    _30 rb[12]; int_to_str(rx_before, rb);
+    str_cat(browser_content, rb);
+    str_cat(browser_content, " | RX AFTER: ");
+    _30 ra[12]; int_to_str(rx_after, ra);
+    str_cat(browser_content, ra);
+    
+    /// Router MAC (HEX)
+    str_cat(browser_content, "\nROUTER MAC: ");
+    _30 hx[4];
+    _39(_43 k=0; k<6; k++) {
+        byte_to_hex(router_mac[k], hx); hx[2]=0;
+        str_cat(browser_content, hx);
+        _15(k<5) str_cat(browser_content, ":");
+    }
+    
+    /// Source IP
+    str_cat(browser_content, "\nSRC IP: ");
+    str_cat(browser_content, ip_address);
+    
+    /// Dest IP
+    str_cat(browser_content, "\nDST IP: ");
+    _30 d1[5],d2[5],d3[5],d4[5];
+    int_to_str((ip >> 24) & 0xFF, d1);
+    int_to_str((ip >> 16) & 0xFF, d2);
+    int_to_str((ip >> 8) & 0xFF, d3);
+    int_to_str(ip & 0xFF, d4);
+    str_cat(browser_content, d1); str_cat(browser_content, ".");
+    str_cat(browser_content, d2); str_cat(browser_content, ".");
+    str_cat(browser_content, d3); str_cat(browser_content, ".");
+    str_cat(browser_content, d4);
+    
+    str_cat(browser_content, "\n\nWAITING FOR SYN-ACK...\n");
+    str_cpy(cmd_status, "TCP: SYN SENT (DIAG MODE)");
+}
+
+_50 send_tcp_ack(_89 ip, _182 p_src, _182 p_dst, _89 seq, _89 ack_num) {
+    send_tcp_payload(ip, p_src, p_dst, seq, ack_num, 0x10, 0, 0);
+    str_cpy(cmd_status, "TCP: ACK SENT");
 }
 _50 rtl_enable_rx() {
     outl(rtl_io_base + 0x30, (_89)(uintptr_t)rx_buffer_rtl);
-    outw(rtl_io_base + 0x3C, 0x0005); 
+    /// BARE METAL FIX: INTERRUPTS AUSSCHALTEN! (Polling-Modus)
+    /// Das alte 0x0005 hat einen Interrupt-Sturm ausgelöst, der QEMU komplett einfrieren ließ!
+    outw(rtl_io_base + 0x3C, 0x0000); 
     outl(rtl_io_base + 0x44, 0x0F | 0x80);
     outb(rtl_io_base + 0x37, 0x0C); 
 }
+
+extern _44 is_over(_43 mx, _43 my, _43 x, _43 y, _43 r);
+extern _184 get_ascii_qwertz(_184 scancode);
+
+#ifdef __x86_64__
+/// --- HOLYSPIRIT SENTINEL EXTERNALS ---
+extern _43 hs_radar_count;
+struct DetectedIP {
+    _184 ip[4];
+    _30 threat[16];
+    _43 hits;
+    _44 isFriend;
+    _30 proto[8];
+};
+extern DetectedIP hs_radar[100];
+extern void hs_add_log(const char* msg);
+#endif
+
 /// =======================================================
 /// DIE NETZWERK-FUNKTIONEN
 /// =======================================================
 _50 e1000_enable_tx() {
     _15(intel_mem_base EQ 0) _96;
 
-    _89 ctrl = mmio_read32(intel_mem_base + 0x0000);
-    mmio_write32(intel_mem_base + 0x0000, ctrl | 0x40 | 0x20 | 0x01);
+    /// ASDE + SLU werden bereits in intel_e1000_init() nach dem PHY-Reset gesetzt.
+    /// Hier lassen wir CTRL unangetastet, damit die Auto-Negotiation nicht gestört wird.
     mmio_write32(intel_mem_base + 0x00D8, 0xFFFFFFFF); /// Interrupts aus!
+
+    /// BARE METAL FIX: TX Queue sauber stoppen!
+    mmio_write32(intel_mem_base + 0x0400, 0); /// TCTL = 0
+    _89 txdctl_old = mmio_read32(intel_mem_base + 0x3828);
+    mmio_write32(intel_mem_base + 0x3828, txdctl_old & ~0x02000000); /// TX Queue Disable
+    _39(_43 wait = 0; wait < 100000; wait++) {
+        _15((mmio_read32(intel_mem_base + 0x3828) & 0x02000000) EQ 0) _37;
+    }
 
     _39(_43 i = 0; i < 32; i++) {
         uint64_t phys_buf = (uint64_t)&e1000_tx_buffers[i][0];
@@ -475,13 +698,16 @@ _50 e1000_enable_tx() {
     mmio_write32(intel_mem_base + 0x3810, 0);         
     mmio_write32(intel_mem_base + 0x3818, 0);
     tx_cur_intel = 0;
+    /// BARE METAL FIX: EXACTLY THE MEILENSTEIN CONFIG!
+    /// Ein Read-Modify-Write hat die Karte zum Absturz gebracht. 
+    /// Die Legacy-Werte (0x0103F0FA) haben im Meilenstein perfekt funktioniert (RX ging!).
     
     mmio_write32(intel_mem_base + 0x0400, 0x0103F0FA); 
     mmio_write32(intel_mem_base + 0x0410, 0x0060200A); 
     
-    /// BARE METAL FIX: TX Queue sauber starten (ohne BIOS-Altlasten)
-    /// 0x02000000 = Queue Enable | 0x00010000 = Granularity
-    mmio_write32(intel_mem_base + 0x3828, 0x02010000);
+    /// BARE METAL FIX: TX Queue starten! (Wie iPXE: NUR Enable-Bit setzen)
+    /// Wir lassen WTHRESH und GRAN auf 0! 
+    mmio_write32(intel_mem_base + 0x3828, 0x02000000);
     _39(_89 wait=0; wait<1000000; wait++) {
         _15((mmio_read32(intel_mem_base + 0x3828) & 0x02000000) NEQ 0) break;
         __asm__ _192("nop");
@@ -490,6 +716,25 @@ _50 e1000_enable_tx() {
 
 _50 e1000_enable_rx() {
     _15(intel_mem_base EQ 0) _96;
+    
+    /// =========================================================
+    /// BARE METAL FIX: WARTEN BIS DIE PXE-ROM-QUEUE GESTOPPT IST!
+    /// Da wir keinen MAC-Reset mehr machen, läuft die alte PXE-Queue noch!
+    /// Wenn wir RDBAL/RDBAH im laufenden Betrieb ändern, crasht der DMA-Controller!
+    /// =========================================================
+    mmio_write32(intel_mem_base + 0x0100, 0); /// RCTL.EN = 0
+    _89 rxdctl_old = mmio_read32(intel_mem_base + 0x2828);
+    mmio_write32(intel_mem_base + 0x2828, rxdctl_old & ~0x02000000); /// RX Queue Disable
+    _39(_43 wait = 0; wait < 100000; wait++) {
+        _15((mmio_read32(intel_mem_base + 0x2828) & 0x02000000) EQ 0) _37;
+    }
+    
+    /// BARE METAL FIX: RFCTL LÖSCHEN! (EXTENDED DESCRIPTORS DEAKTIVIEREN)
+    /// Die PXE ROM hat evtl. Advanced Descriptors (für IPv6/Checksums) aktiviert!
+    /// Unser OS nutzt aber Legacy Descriptors (Word 3 = Status/Length).
+    /// Wenn RFCTL nicht 0 ist, sucht die Karte das DD-Bit an der falschen Stelle!
+    mmio_write32(intel_mem_base + 0x5008, 0);
+
     _39(_43 i=0; i<32; i++) {
         uint64_t phys_buf = (uint64_t)&e1000_rx_buffers[i][0];
         e1000_rx_ring[i*4 + 0] = (uint32_t)(phys_buf & 0xFFFFFFFF); 
@@ -501,19 +746,63 @@ _50 e1000_enable_rx() {
     mmio_write32(intel_mem_base + 0x2800, (uint32_t)(ring_phys_rx & 0xFFFFFFFF));
     mmio_write32(intel_mem_base + 0x2804, (uint32_t)((ring_phys_rx >> 32) & 0xFFFFFFFF));        
     mmio_write32(intel_mem_base + 0x2808, 512);      
-    mmio_write32(intel_mem_base + 0x2810, 0);        
-    mmio_write32(intel_mem_base + 0x2818, 31);
+    mmio_write32(intel_mem_base + 0x2810, 0);        /// RDH = 0
     
     _89 rxdctl = mmio_read32(intel_mem_base + 0x2828);
-    mmio_write32(intel_mem_base + 0x2828, rxdctl | 0x02000000); 
+    mmio_write32(intel_mem_base + 0x2828, rxdctl | 0x02000000); /// Enable Queue
     
+    /// BARE METAL FIX: Warten, bis die Hardware die Queue wirklich aktiviert hat!
+    /// Wenn wir RDT schreiben, bevor Bit 25 "1" ist, ignoriert die Karte das!
+    _39(_89 wait = 0; wait < 1000000; wait++) {
+        _15((mmio_read32(intel_mem_base + 0x2828) & 0x02000000) NEQ 0) _37;
+        __asm__ _192("nop");
+    }
+
     _39(_43 i = 0; i < 128; i++) { mmio_write32(intel_mem_base + 0x5200 + (i * 4), 0); }
+    
+    /// =========================================================
+    /// BARE METAL FIX: RCTL KORREKT SETZEN!
+    /// 0x0402801E =
+    ///   Bit 1  (EN=1)    : Receiver Enable
+    ///   Bit 2  (SBP=1)   : Store Bad Packets
+    ///   Bit 3  (UPE=1)   : Unicast Promiscuous
+    ///   Bit 4  (MPE=1)   : Multicast Promiscuous
+    ///   Bit 15 (BAM=1)   : Broadcast Accept
+    ///   Bit 16-17 (BSIZE=00) : 2048 Byte Buffers
+    ///   Bit 25 (BSEX=1)  : Buffer Size Extension -> 2048 wird zu 4096! (Ist hier 0)
+    ///   Bit 26 (SECRC=1) : Strip Ethernet CRC
+    /// =========================================================
+    /// BARE METAL FIX: 0x0400801E zwingt die Hardware auf 2048 Bytes (0x020000 war 512/1024!)
     mmio_write32(intel_mem_base + 0x0100, 0x0400801E);
+    
+    /// BARE METAL FIX: RDT (Tail) MUSS zwingend NACH dem RCTL.EN geschrieben werden, 
+    /// sonst holt die I219-V keine Deskriptoren ab!
+    mmio_write32(intel_mem_base + 0x2818, 31);       /// RDT = 31
 }
 
-_50 intel_e1000_init(_89 mmio_addr) {
-    intel_mem_base = mmio_addr & 0xFFFFFFF0;
+_50 intel_e1000_init(_89 addr, _182 device_id) {
+    intel_mem_base = addr & 0xFFFFFFF0;
+    
+    /// BARE METAL FIX: Erkennen, ob es eine moderne PCH-MAC (z.B. I219-V) ist.
+    /// QEMU 82540EM hat device_id 0x100E. Alles andere betrachten wir als modern!
+    is_modern_intel = (device_id NEQ 0x100E);
     _15(intel_mem_base EQ 0) _96;
+
+    /// =========================================================
+    /// BARE METAL FIX: DMA-ZONEN ALS UNCACHEABLE RE-MAPPEN!
+    /// Die os2_entry.s Page Tables mappen ALLES mit 0x83 (Write-Back).
+    /// Aber DMA-Puffer MÜSSEN Cache-Disabled sein, sonst sieht die CPU
+    /// die NIC-DMA-Schreibvorgänge NIEMALS (sie liest nur ihren Cache)!
+    /// Das ist DER Grund warum TX=1 und RX=0: Das Paket wird gesendet,
+    /// die Antwort kommt per DMA im RAM an, aber die CPU liest cached 0.
+    /// =========================================================
+#ifdef __x86_64__
+    map_mmio_64(0x00C00000); /// RTL RX buffer
+    map_mmio_64(0x00C10000); /// RTL TX buffer
+    map_mmio_64(0x10000000); /// E1000 RX ring + TX ring
+    map_mmio_64(0x10020000); /// E1000 RX buffers
+    map_mmio_64(0x10040000); /// E1000 TX buffers
+#endif
 
     /// 1. MAC RETTEN (Dein Code ist perfekt!)
     _89 ral = mmio_read32(intel_mem_base + 0x5400);
@@ -525,6 +814,9 @@ _50 intel_e1000_init(_89 mmio_addr) {
     } _41 {
         mac_addr[0] = 0x52; mac_addr[1] = 0x54; mac_addr[2] = 0x00;
         mac_addr[3] = 0x12; mac_addr[4] = 0x34; mac_addr[5] = 0x56;
+        /// BARE METAL FIX: Wenn die MAC 0 war, MÜSSEN wir sie der Hardware beibringen!
+        mmio_write32(intel_mem_base + 0x5400, 0x12005452); /// 52 54 00 12 (Little Endian)
+        mmio_write32(intel_mem_base + 0x5404, 0x80005634); /// 34 56 + Bit 31 (Address Valid)
     }
     _30* p = mac_str;
     _39(_43 i=0; i<6; i++) { byte_to_hex(mac_addr[i], p); p+=2; _15(i<5) *p++ = ':'; } *p = 0;
@@ -538,18 +830,70 @@ _50 intel_e1000_init(_89 mmio_addr) {
     mmio_write32(intel_mem_base + 0x0018, ctrl_ext | 0x10000000);
 
     /// =======================================================
-    /// 3. BARE METAL FIX: HARD-RESET + KUPFER-RESET (PHY)
+    /// 3. BARE METAL FIX: HARD-RESET + LINK-UP WARTEN!
     /// =======================================================
-    /// Dein 0x04000000 war ein Soft-Reset. Wir brauchen auf Gaming-PCs 
-    /// zusätzlich 0x80000000 (PHY Reset), um das Kupferkabel zu wecken!
+    /// Da du per USB bootest (PXE aus), schläft die Netzwerkkarte!
+    /// Wir MÜSSEN den MAC-Reset durchführen, sonst bleibt sie aus.
+    /// BARE METAL FIX: Nur MAC-Reset (Bit 26: 0x04000000) durchführen!
+    /// Ein PHY-Reset (Bit 31: 0x80000000) zwingt die I219-V auf 10 Mbit
+    /// zurück, da wir keinen komplexen MDIO-Treiber haben, um sie wieder
+    /// auf 1 Gbit hochzuhandeln.
     _89 ctrl_rst = mmio_read32(intel_mem_base + 0x0000);
-    ///mmio_write32(intel_mem_base + 0x0000, ctrl_rst | 0x04000000);
+    mmio_write32(intel_mem_base + 0x0000, ctrl_rst | 0x04000000);
     
-    /// Warten, bis der Chip neu gebootet ist
+    /// Kurz warten, bis der Reset durch ist
     _39(_192 _89 delay = 0; delay < 1000000; delay++) { __asm__ _192("nop"); }
     
+    /// BARE METAL FIX: MAC ADRESSE WIEDERHERSTELLEN!
+    /// Ein CTRL.RST löscht auf manchen NICs die RAL/RAH Register, 
+    /// und wenn kein Auto-EEPROM-Read passiert, senden wir mit MAC 00:00:00:00:00:00!
+    _89 new_ral = mac_addr[0] | (mac_addr[1] << 8) | (mac_addr[2] << 16) | (mac_addr[3] << 24);
+    _89 new_rah = mac_addr[4] | (mac_addr[5] << 8) | 0x80000000; /// 0x80000000 = Address Valid!
+    mmio_write32(intel_mem_base + 0x5400, new_ral);
+    mmio_write32(intel_mem_base + 0x5404, new_rah);
+    
+    /// =======================================================
+    /// BARE METAL FIX: ASDE + SLU WIEDERHERGESTELLT!
+    /// Da Gigabit-Force das Senden blockiert hat (TX=0), MÜSSEN wir
+    /// der MAC erlauben, auf 10 Mbit zu laufen. 10 Mbit reicht 
+    /// völlig für TCP/HTTP! Der Fehler liegt nicht am Speed!
+    /// =======================================================
+    _39(_192 _89 settle = 0; settle < 5000000; settle++) { __asm__ _192("nop"); }
+    _89 ctrl_post = mmio_read32(intel_mem_base + 0x0000);
+    ctrl_post |= (1 << 5);   /// ASDE: Auto-Speed Detection Enable
+    ctrl_post |= (1 << 6);   /// SLU: Set Link Up
+    ctrl_post &= ~(1 << 11); /// FRCSPD aus: Geschwindigkeit NICHT erzwingen
+    ctrl_post &= ~(1 << 12); /// FRCDPLX aus: Duplex NICHT erzwingen
+    
+    mmio_write32(intel_mem_base + 0x0000, ctrl_post);
+    
+    /// BARE METAL FIX: Warten auf den "Link Up"!
+    /// Nach einem Reset dauert Auto-Negotiation bis zu 3 Sekunden.
+    /// Wir MÜSSEN warten, bis das Kabel physikalisch verbunden ist!
+    _30 link_str[50] = "WAITING FOR LINK...";
+    str_cpy(cmd_status, link_str);
+    
+    _43 link_up = 0;
+    _39(_43 timeout = 0; timeout < 50; timeout++) {
+        _89 status = mmio_read32(intel_mem_base + 0x0008);
+        _15(status & 0x02) { 
+            link_up = 1; 
+            break; 
+        }
+        /// Eine kleine Verzögerung (ca. 100ms)
+        _39(_192 _89 delay = 0; delay < 20000000; delay++) { __asm__ _192("nop"); }
+    }
+    _15(link_up) {
+        str_cpy(cmd_status, "LINK UP DETECTED!");
+    } _41 {
+        str_cpy(cmd_status, "LINK DOWN (CABLE UNPLUGGED?)");
+    }
+
     /// Alte Interrupts löschen
     mmio_write32(intel_mem_base + 0x00D8, 0xFFFFFFFF);
+    /// ICR auslesen, um pending Interrupts zu quittieren
+    mmio_read32(intel_mem_base + 0x00C0);
+
 	/// =======================================================
     /// BARE METAL FIX: WAKE-ON-LAN (ZOMBIE-MODUS) BEENDEN!
     /// =======================================================
@@ -557,23 +901,13 @@ _50 intel_e1000_init(_89 mmio_addr) {
     mmio_write32(intel_mem_base + 0x5808, 0); /// WUFC (Wake Up Filter) abschalten
     mmio_write32(intel_mem_base + 0x5810, 0); /// WUS (Wake Up Status) löschen
     
-    /// =======================================================
-    /// 4. MAC-ADRESSE WIEDER IN DEN CHIP SCHREIBEN!
-    /// (Der Reset hat sie aus dem Chip gelöscht!)
-    /// =======================================================
-    _89 new_ral = mac_addr[0] | (mac_addr[1] << 8) | (mac_addr[2] << 16) | (mac_addr[3] << 24);
-    _89 new_rah = mac_addr[4] | (mac_addr[5] << 8) | 0x80000000; /// 0x80000000 = Address Valid!
-    mmio_write32(intel_mem_base + 0x5400, new_ral);
-    mmio_write32(intel_mem_base + 0x5404, new_rah);
-
     /// --- SANFTER STOPP UND LINK UP ---
     mmio_write32(intel_mem_base + 0x0100, 0); 
     mmio_write32(intel_mem_base + 0x0400, 0); 
     _39(_192 _89 delay = 0; delay < 1000000; delay++) { __asm__ _192("nop"); }
     
-    /// Link Up (SLU) und Auto-Speed (ASDE) erzwingen
-    _89 ctrl = mmio_read32(intel_mem_base + 0x0000);
-    ///mmio_write32(intel_mem_base + 0x0000, ctrl | 0x00000060);
+    /// ASDE + SLU sind bereits in intel_e1000_init() gesetzt.
+    /// Hier nur noch ICR auslesen, um pending Interrupts zu quittieren.
     mmio_read32(intel_mem_base + 0x00C0);
     
     e1000_enable_rx();
@@ -588,11 +922,13 @@ _50 e1000_check_rx() {
 
     _39(_89 i = 0; i < 32; i++) {
         
-        /// BARE METAL FIX: DER HARDWARE-CACHE VERNICHTER!
-        /// Bevor wir lesen, zwingen wir die CPU, ihren Cache wegzuwerfen!
-        __asm__ _192("wbinvd" ::: "memory");
-
+        /// =========================================================
+        /// BARE METAL FIX: Auf x86 ist DMA-Write automatisch Cache-Coherent!
+        /// Ein wbinvd in dieser Endlosschleife lockt den Memory-Bus 
+        /// und verhindert, dass die NIC jemals in den RAM schreiben kann!
+        /// =========================================================
         volatile unsigned int* rx_desc = (volatile unsigned int*)&e1000_rx_ring[rx_cur_intel * 4];
+        __asm__ volatile("" ::: "memory"); /// Compiler memory barrier
         
         _89 status = rx_desc[3];
 
@@ -632,6 +968,47 @@ _50 e1000_check_rx() {
         *p_hex = 0;
         str_cpy(cmd_status, hex_buf);
 
+        /// --- HOLYSPIRIT OMNI-CRAWLER INTERCEPTOR ---
+#ifdef __x86_64__
+        if (raw_data[12] == 0x08 && raw_data[13] == 0x00) { // IPv4
+            _184 src_ip[4] = { raw_data[26], raw_data[27], raw_data[28], raw_data[29] };
+            _184 proto = raw_data[23];
+            
+            // Find existing target
+            int found = -1;
+            for(int i = 0; i < hs_radar_count; i++) {
+                if(hs_radar[i].ip[0] == src_ip[0] && hs_radar[i].ip[1] == src_ip[1] &&
+                   hs_radar[i].ip[2] == src_ip[2] && hs_radar[i].ip[3] == src_ip[3]) {
+                    found = i; break;
+                }
+            }
+            if (found == -1 && hs_radar_count < 100) {
+                found = hs_radar_count++;
+                hs_radar[found].ip[0] = src_ip[0]; hs_radar[found].ip[1] = src_ip[1];
+                hs_radar[found].ip[2] = src_ip[2]; hs_radar[found].ip[3] = src_ip[3];
+                hs_radar[found].hits = 0;
+                hs_radar[found].isFriend = (src_ip[0] == 192 && src_ip[1] == 168);
+                if (proto == 1) str_cpy(hs_radar[found].proto, "ICMP");
+                else if (proto == 6) str_cpy(hs_radar[found].proto, "TCP");
+                else if (proto == 17) str_cpy(hs_radar[found].proto, "UDP");
+                else str_cpy(hs_radar[found].proto, "UNK");
+                
+                // Add Log
+                char log_msg[64];
+                str_cpy(log_msg, "DETECTED NEW THREAT FROM ");
+                char ip_str[16];
+                int_to_str(src_ip[0], ip_str); str_cat(log_msg, ip_str); str_cat(log_msg, ".");
+                int_to_str(src_ip[1], ip_str); str_cat(log_msg, ip_str); str_cat(log_msg, ".");
+                int_to_str(src_ip[2], ip_str); str_cat(log_msg, ip_str); str_cat(log_msg, ".");
+                int_to_str(src_ip[3], ip_str); str_cat(log_msg, ip_str);
+                hs_add_log(log_msg);
+            }
+            if (found != -1) {
+                hs_radar[found].hits++;
+            }
+        }
+#endif
+
         /// --- VLAN-FILTER ---
         _43 off = 0;
         _15(raw_data[12] EQ 0x81 AND raw_data[13] EQ 0x00) off = 4;
@@ -639,23 +1016,248 @@ _50 e1000_check_rx() {
 
         /// --- 1. WEICHE: ARP ---
         _15(len >= 42+off AND raw_data[12+off] EQ 0x08 AND raw_data[13+off] EQ 0x06) {
-            _15(raw_data[21+off] EQ 0x02) { 
-                str_cpy(cmd_status, "ONLINE (ARP OK)!");
-                _30* ip_ptr = ip_address;
-                int_to_str(raw_data[28+off], ip_ptr); _114(*ip_ptr) ip_ptr++; *ip_ptr++ = '.';
-                int_to_str(raw_data[29+off], ip_ptr); _114(*ip_ptr) ip_ptr++; *ip_ptr++ = '.';
-                int_to_str(raw_data[30+off], ip_ptr); _114(*ip_ptr) ip_ptr++; *ip_ptr++ = '.';
-                int_to_str(raw_data[31+off], ip_ptr); _114(*ip_ptr) ip_ptr++; *ip_ptr = 0;
+            /// =========================================================
+            /// BARE METAL FIX: ARP REQUEST BEANTWORTEN! (Opcode 1)
+            /// Ohne das kann die FritzBox unsere MAC nicht finden und
+            /// wirft DNS/TCP-Antworten weg!
+            /// =========================================================
+            _15(raw_data[21+off] EQ 0x01) {
+                /// Prüfe ob die Anfrage an UNSERE IP gerichtet ist
+                _89 target_ip = (raw_data[38+off] << 24) | (raw_data[39+off] << 16) | (raw_data[40+off] << 8) | raw_data[41+off];
+                _89 my_ip = ip_str_to_u32(ip_address);
+                _15(target_ip EQ my_ip AND my_ip NEQ 0) {
+                    /// ARP Reply bauen (im eigenen Buffer!)
+                    _184 reply[60];
+                    _39(_43 k=0; k<60; k++) reply[k] = 0;
+                    /// 1. Ethernet: Ziel = Absender des Requests
+                    _39(_43 k=0; k<6; k++) reply[k] = raw_data[6+off+k];
+                    /// 2. Ethernet: Quelle = unsere MAC
+                    _39(_43 k=0; k<6; k++) reply[6+k] = mac_addr[k];
+                    /// 3. EtherType = ARP (0x0806)
+                    reply[12] = 0x08; reply[13] = 0x06;
+                    /// 4. ARP Header
+                    reply[14] = 0x00; reply[15] = 0x01; /// Hardware: Ethernet
+                    reply[16] = 0x08; reply[17] = 0x00; /// Protocol: IPv4
+                    reply[18] = 0x06; reply[19] = 0x04; /// HW len=6, Proto len=4
+                    reply[20] = 0x00; reply[21] = 0x02; /// Opcode: REPLY (2)
+                    /// 5. Sender = WIR (MAC + IP)
+                    _39(_43 k=0; k<6; k++) reply[22+k] = mac_addr[k];
+                    reply[28] = (my_ip >> 24) & 0xFF;
+                    reply[29] = (my_ip >> 16) & 0xFF;
+                    reply[30] = (my_ip >> 8) & 0xFF;
+                    reply[31] = my_ip & 0xFF;
+                    /// 6. Target = der Fragesteller (MAC + IP aus dem Request)
+                    _39(_43 k=0; k<6; k++) reply[32+k] = raw_data[22+off+k];
+                    _39(_43 k=0; k<4; k++) reply[38+k] = raw_data[28+off+k];
+                    /// 7. ABSCHIESSEN!
+                    net_raw(reply, 60);
+                    str_cpy(cmd_status, "ARP REPLY SENT!");
+                    packet_was_important = _128;
+                }
+            }
+            /// ARP Reply empfangen (Opcode 2) - Router-MAC lernen
+            _41 _15(raw_data[21+off] EQ 0x02) { 
+                _89 sender_ip = (raw_data[28+off] << 24) | (raw_data[29+off] << 16) | (raw_data[30+off] << 8) | raw_data[31+off];
+                _89 gw_ip = ip_str_to_u32(gateway_ip);
+                _15(sender_ip EQ gw_ip) {
+                    _39(_43 k=0; k<6; k++) router_mac[k] = raw_data[22+off+k];
+                    str_cpy(cmd_status, "ONLINE (ARP ROUTER OK)!");
+                }
                 packet_was_important = _128;
             }
         }
 
-        /// --- 2. WEICHE: DHCP (THE ULTIMATE PARSER) ---
+        /// --- 2. WEICHE: TCP PARSER ---
+        _41 _15(raw_data[12+off] EQ 0x08 AND raw_data[13+off] EQ 0x00 AND raw_data[23+off] EQ 0x06) {
+            _43 ip_hl = (raw_data[14+off] & 0x0F) * 4;
+            _182 ip_total_len = (raw_data[16+off] << 8) | raw_data[17+off];
+            _43 tcp_start = 14 + off + ip_hl;
+            
+            _182 dst_port = (raw_data[tcp_start+2] << 8) | raw_data[tcp_start+3];
+            _89 seq = (raw_data[tcp_start+4] << 24) | (raw_data[tcp_start+5] << 16) | (raw_data[tcp_start+6] << 8) | raw_data[tcp_start+7];
+            _89 ack = (raw_data[tcp_start+8] << 24) | (raw_data[tcp_start+9] << 16) | (raw_data[tcp_start+10] << 8) | raw_data[tcp_start+11];
+            
+            _184 tcp_hl = (raw_data[tcp_start+12] >> 4) * 4;
+            _184 flags = raw_data[tcp_start+13];
+            
+            _43 payload_start = tcp_start + tcp_hl;
+            _43 tcp_payload_len = 0;
+            _15(ip_total_len >= ip_hl + tcp_hl) {
+                tcp_payload_len = ip_total_len - ip_hl - tcp_hl;
+            }
+            
+            _15(browser_tcp.state NEQ 0 AND dst_port EQ browser_tcp.local_port) {
+                _15((flags & 0x12) EQ 0x12) {
+                    browser_tcp.state = 2; 
+                    browser_tcp.my_ack = seq + 1;
+                    browser_tcp.my_seq++; 
+                    
+                    send_tcp_ack(browser_tcp.remote_ip, browser_tcp.local_port, browser_tcp.remote_port, browser_tcp.my_seq, browser_tcp.my_ack);
+                    
+                    _30 host[64];
+                    _30 path[512];
+                    _43 s_idx = 0;
+                    _15(str_starts(browser_url, "HTTP://") || str_starts(browser_url, "http://")) s_idx = 7;
+                    _41 _15(str_starts(browser_url, "HTTPS://") || str_starts(browser_url, "https://")) s_idx = 8;
+                    str_cpy(host, browser_url + s_idx);
+                    str_cpy(path, "/");
+                    for(int i=0; i<64; i++) {
+                        if(host[i] == '/') {
+                            host[i] = 0;
+                            str_cpy(path, browser_url + s_idx + i);
+                            break;
+                        }
+                    }
+                    
+                    _30 get_req[1024];
+                    str_cpy(get_req, "GET ");
+                    _43 g_idx = 4;
+                    for (int k = 0; path[k] != 0 && g_idx < 900; k++) {
+                        if (path[k] == ' ') {
+                            get_req[g_idx++] = '+'; // Use + or %20. + is safer for queries
+                        } else {
+                            get_req[g_idx++] = path[k];
+                        }
+                    }
+                    get_req[g_idx] = 0;
+                    str_cat(get_req, " HTTP/1.0\r\nHost: ");
+                    str_cat(get_req, host);
+                    str_cat(get_req, "\r\nConnection: close\r\n\r\n");
+                    _43 req_len = str_len(get_req);
+                    send_tcp_payload(browser_tcp.remote_ip, browser_tcp.local_port, browser_tcp.remote_port, browser_tcp.my_seq, browser_tcp.my_ack, 0x18, (_184*)get_req, req_len);
+                    browser_tcp.my_seq += req_len;
+                    
+                    browser_download_len = 0;
+                    browser_content_length = 0;
+                    browser_download_complete = 0;
+                    str_cpy(cmd_status, "TCP: CONNECTED & GET SENT");
+                }
+                _41 _15(tcp_payload_len > 0) {
+                    browser_tcp.my_ack = seq + tcp_payload_len;
+                    send_tcp_ack(browser_tcp.remote_ip, browser_tcp.local_port, browser_tcp.remote_port, browser_tcp.my_seq, browser_tcp.my_ack);
+                    
+                    _15(browser_download_len + tcp_payload_len < 3000000) {
+                        _39(_43 i=0; i<tcp_payload_len; i++) browser_download_buffer[browser_download_len+i] = raw_data[payload_start+i];
+                        browser_download_len += tcp_payload_len;
+                    }
+                    
+                    if (browser_content_length == 0 && browser_download_len > 20) {
+                        for(uint32_t i=0; i<browser_download_len-16; i++) {
+                            if (browser_download_buffer[i] == 'C' && browser_download_buffer[i+1] == 'o' && browser_download_buffer[i+8] == 'L' && browser_download_buffer[i+14] == 'h' && browser_download_buffer[i+15] == ':') {
+                                uint32_t v = 0;
+                                uint32_t j = i + 16;
+                                while(browser_download_buffer[j] == ' ') j++;
+                                while(browser_download_buffer[j] >= '0' && browser_download_buffer[j] <= '9') {
+                                    v = v * 10 + (browser_download_buffer[j] - '0');
+                                    j++;
+                                }
+                                browser_content_length = v;
+                                break;
+                            }
+                        }
+                    }
+                    /// BARE METAL FIX: Call parse_html progressively since modern servers use keep-alive and never send FIN!
+#ifdef __x86_64__
+                    if (!pkg_download_active) {
+                        parse_html();
+                    }
+#endif
+
+                    str_cpy(cmd_status, "TCP: DATA RX");
+                }
+                _41 _15(flags & 0x01) {
+                    browser_tcp.my_ack = seq + 1;
+                    send_tcp_ack(browser_tcp.remote_ip, browser_tcp.local_port, browser_tcp.remote_port, browser_tcp.my_seq, browser_tcp.my_ack);
+                    browser_tcp.state = 0; 
+                    browser_download_complete = 1;
+#ifdef __x86_64__
+                    if (!pkg_download_active) {
+                        parse_html();
+                    }
+#endif
+                    str_cpy(cmd_status, "TCP: CLOSED");
+                }
+                _41 _15(flags & 0x04) {
+                    browser_tcp.state = 0; 
+                    browser_download_complete = 1;
+                    str_cpy(cmd_status, "TCP: CONNECTION REFUSED (RST)");
+                }
+            }
+            packet_was_important = _128;
+        }
+
+
+
+
+        /// --- 3. WEICHE: DHCP (THE ULTIMATE PARSER) ---
         /// BARE METAL FIX: Dynamische IP-Header-Länge berechnen!
         _41 _15(raw_data[12+off] EQ 0x08 AND raw_data[13+off] EQ 0x00 AND raw_data[23+off] EQ 0x11) {
             _43 ip_hl = (raw_data[14+off] & 0x0F) * 4; /// Berechnet die echte Header-Länge
             _43 udp_start = 14 + off + ip_hl;
             _43 bootp_start = udp_start + 8;
+
+              /// Ist es DNS? (Quell-Port ist 53 / 0x0035)
+              _15(raw_data[udp_start] EQ 0x00 AND raw_data[udp_start+1] EQ 0x35) {
+                  str_cpy(browser_content, "DNS RESPONSE RECEIVED!\nPARSING...\n");
+                  _43 q_cnt = (raw_data[bootp_start+4] << 8) | raw_data[bootp_start+5];
+                  _43 a_cnt = (raw_data[bootp_start+6] << 8) | raw_data[bootp_start+7];
+                  
+                  _15(a_cnt > 0) {
+                      str_cpy(browser_content, "DNS RESPONSE RECEIVED!\nANSWERS > 0!\n");
+                      _43 idx = bootp_start + 12;
+                                              /// Skip Questions Safely
+                        _39(_43 q = 0; q < q_cnt; q++) {
+                            _44 q_done = _86;
+                            _114(!q_done) {
+                                _15((raw_data[idx] & 0xC0) EQ 0xC0) {
+                                    idx += 2;
+                                    q_done = _128;
+                                } _41 _15(raw_data[idx] EQ 0) {
+                                    idx += 1;
+                                    q_done = _128;
+                                } _41 {
+                                    idx += raw_data[idx] + 1;
+                                }
+                            }
+                            idx += 4; /// Skip type/class
+                        }
+                      
+                      /// Parse Answers
+                      _39(_43 a = 0; a < a_cnt; a++) {
+                                                    /// Skip Name Safely
+                          _44 a_done = _86;
+                          _114(!a_done) {
+                              _15((raw_data[idx] & 0xC0) EQ 0xC0) {
+                                  idx += 2;
+                                  a_done = _128;
+                              } _41 _15(raw_data[idx] EQ 0) {
+                                  idx += 1;
+                                  a_done = _128;
+                              } _41 {
+                                  idx += raw_data[idx] + 1;
+                              }
+                          }
+                          
+                          _184 type_hi = raw_data[idx++]; _184 type_lo = raw_data[idx++];
+                          _184 class_hi = raw_data[idx++]; _184 class_lo = raw_data[idx++];
+                          idx += 4; /// Skip TTL
+                          _184 dlen_hi = raw_data[idx++]; _184 dlen_lo = raw_data[idx++];
+                          _43 dlen = (dlen_hi << 8) | dlen_lo;
+                          
+                          _15(type_hi EQ 0x00 AND type_lo EQ 0x01 AND class_hi EQ 0x00 AND class_lo EQ 0x01 AND dlen EQ 4) {
+                              _89 ip1 = raw_data[idx++]; _89 ip2 = raw_data[idx++];
+                              _89 ip3 = raw_data[idx++]; _89 ip4 = raw_data[idx++];
+                              browser_tcp.remote_ip = (ip1 << 24) | (ip2 << 16) | (ip3 << 8) | ip4;
+                              str_cpy(cmd_status, "DNS: IP GEFUNDEN!");
+                              send_tcp_syn(browser_tcp.remote_ip, 80);
+                              _37;
+                          } _41 {
+                              idx += dlen;
+                          }
+                      }
+                  }
+                  }
+
 
             _15(len > bootp_start + 240) { /// Ist das Paket groß genug?
                 /// Port 68 (0x44) und BOOTP Reply (0x02) Check
@@ -694,14 +1296,28 @@ _50 e1000_check_rx() {
                                 int_to_str(raw_data[j+4], g_ptr); _114(*g_ptr) g_ptr++; *g_ptr++ = '.';
                                 int_to_str(raw_data[j+5], g_ptr); _114(*g_ptr) g_ptr++; *g_ptr = 0;
                             }
+                            
+                            _15(opt EQ 6 AND opt_len >= 4) {
+                                _30* d_ptr = dns_ip;
+                                int_to_str(raw_data[j+2], d_ptr); _114(*d_ptr) d_ptr++; *d_ptr++ = '.';
+                                int_to_str(raw_data[j+3], d_ptr); _114(*d_ptr) d_ptr++; *d_ptr++ = '.';
+                                int_to_str(raw_data[j+4], d_ptr); _114(*d_ptr) d_ptr++; *d_ptr++ = '.';
+                                int_to_str(raw_data[j+5], d_ptr); _114(*d_ptr) d_ptr++; *d_ptr = 0;
+                            }
                             j += 2 + opt_len; 
                         }
                         
                         _15(msg_type EQ 2) str_cpy(cmd_status, "DHCP OFFER RX (IP GEFUNDEN!)");
-                        _41 _15(msg_type EQ 5) str_cpy(cmd_status, "DHCP ACK RX (ONLINE!)");
+                        _41 _15(msg_type EQ 5) {
+                            str_cpy(cmd_status, "DHCP ACK RX (ONLINE!)");
+                            send_arp_ping();
+                        }
                         _41 str_cpy(cmd_status, "DHCP RX: PROTOCOL OK");
                         packet_was_important = _128;
                     }
+
+
+
                 }
             }
         }
@@ -727,6 +1343,9 @@ _50 e1000_check_rx() {
 
         /// --- CLEANUP ---
         rx_desc[3] = 0; /// Status-Bit im echten RAM löschen!
+        /// BARE METAL FIX: wbinvd zwingend nötig für x32 BSS und x64 MTRR Konflikte!
+        __asm__ _192("wbinvd" ::: "memory");
+        
         last_processed = rx_cur_intel;
         rx_cur_intel = (rx_cur_intel + 1) % 32;
         processed_any = 1; /// Wir haben erfolgreich etwas verarbeitet!
@@ -778,6 +1397,14 @@ _50 check_incoming() {
                     net_raw((_184*)raw_data, 42);
                     str_cpy(cmd_status, "ARP REPLY GESENDET!");
                 }
+                _41 _15(raw_data[20] EQ 0x00 AND raw_data[21] EQ 0x02) {
+                    _89 sender_ip = (raw_data[28] << 24) | (raw_data[29] << 16) | (raw_data[30] << 8) | raw_data[31];
+                    _89 gw_ip = ip_str_to_u32(gateway_ip);
+                    _15(sender_ip EQ gw_ip) {
+                        _39(_43 k=0; k<6; k++) router_mac[k] = raw_data[22+k];
+                        str_cpy(cmd_status, "ONLINE (ARP ROUTER OK)!");
+                    }
+                }
             }
             /// ====================================================
             /// 2. IST ES EIN IPv4-PAKET? (EtherType 0x0800)
@@ -788,6 +1415,69 @@ _50 check_incoming() {
                     _43 ip_hl = (raw_data[14] & 0x0F) * 4;
                     _43 udp_start = 14 + ip_hl;
                     _43 bootp_start = udp_start + 8;
+
+              /// Ist es DNS? (Quell-Port ist 53 / 0x0035)
+              _15(raw_data[udp_start] EQ 0x00 AND raw_data[udp_start+1] EQ 0x35) {
+                  str_cpy(browser_content, "DNS RESPONSE RECEIVED!\nPARSING...\n");
+                  _43 q_cnt = (raw_data[bootp_start+4] << 8) | raw_data[bootp_start+5];
+                  _43 a_cnt = (raw_data[bootp_start+6] << 8) | raw_data[bootp_start+7];
+                  
+                  _15(a_cnt > 0) {
+                      str_cpy(browser_content, "DNS RESPONSE RECEIVED!\nANSWERS > 0!\n");
+                      _43 idx = bootp_start + 12;
+                                              /// Skip Questions Safely
+                        _39(_43 q = 0; q < q_cnt; q++) {
+                            _44 q_done = _86;
+                            _114(!q_done) {
+                                _15((raw_data[idx] & 0xC0) EQ 0xC0) {
+                                    idx += 2;
+                                    q_done = _128;
+                                } _41 _15(raw_data[idx] EQ 0) {
+                                    idx += 1;
+                                    q_done = _128;
+                                } _41 {
+                                    idx += raw_data[idx] + 1;
+                                }
+                            }
+                            idx += 4; /// Skip type/class
+                        }
+                      
+                      /// Parse Answers
+                      _39(_43 a = 0; a < a_cnt; a++) {
+                                                    /// Skip Name Safely
+                          _44 a_done = _86;
+                          _114(!a_done) {
+                              _15((raw_data[idx] & 0xC0) EQ 0xC0) {
+                                  idx += 2;
+                                  a_done = _128;
+                              } _41 _15(raw_data[idx] EQ 0) {
+                                  idx += 1;
+                                  a_done = _128;
+                              } _41 {
+                                  idx += raw_data[idx] + 1;
+                              }
+                          }
+                          
+                          _184 type_hi = raw_data[idx++]; _184 type_lo = raw_data[idx++];
+                          _184 class_hi = raw_data[idx++]; _184 class_lo = raw_data[idx++];
+                          idx += 4; /// Skip TTL
+                          _184 dlen_hi = raw_data[idx++]; _184 dlen_lo = raw_data[idx++];
+                          _43 dlen = (dlen_hi << 8) | dlen_lo;
+                          
+                          _15(type_hi EQ 0x00 AND type_lo EQ 0x01 AND class_hi EQ 0x00 AND class_lo EQ 0x01 AND dlen EQ 4) {
+                              _89 ip1 = raw_data[idx++]; _89 ip2 = raw_data[idx++];
+                              _89 ip3 = raw_data[idx++]; _89 ip4 = raw_data[idx++];
+                              browser_tcp.remote_ip = (ip1 << 24) | (ip2 << 16) | (ip3 << 8) | ip4;
+                              str_cpy(cmd_status, "DNS: IP GEFUNDEN!");
+                              send_tcp_syn(browser_tcp.remote_ip, 80);
+                              _37;
+                          } _41 {
+                              idx += dlen;
+                          }
+                      }
+                  }
+                  }
+
                     
                     /// Ist es DHCP? (Ziel-Port ist 68 / 0x0044)
                     _15(raw_data[udp_start+2] EQ 0x00 AND raw_data[udp_start+3] EQ 0x44) {
@@ -803,13 +1493,60 @@ _50 check_incoming() {
                         int_to_str(ip2, tmp); str_cat(ip_address, tmp); str_cat(ip_address, ".");
                         int_to_str(ip3, tmp); str_cat(ip_address, tmp); str_cat(ip_address, ".");
                         int_to_str(ip4, tmp); str_cat(ip_address, tmp);
+                          
+                        _43 j = bootp_start + 240; 
+                        _43 msg_type = 0;
+                        _114(j < rx_len AND raw_data[j] NEQ 255) {
+                            _184 opt = raw_data[j];
+                            _15(opt EQ 0) { j++; _101; } 
+                            _184 opt_len = raw_data[j+1];
+                            
+                            _15(opt EQ 53) msg_type = raw_data[j+2];
+                            
+                            _15(opt EQ 1 AND opt_len EQ 4) {
+                                _30* m_ptr = net_mask;
+                                int_to_str(raw_data[j+2], m_ptr); _114(*m_ptr) m_ptr++; *m_ptr++ = '.';
+                                int_to_str(raw_data[j+3], m_ptr); _114(*m_ptr) m_ptr++; *m_ptr++ = '.';
+                                int_to_str(raw_data[j+4], m_ptr); _114(*m_ptr) m_ptr++; *m_ptr++ = '.';
+                                int_to_str(raw_data[j+5], m_ptr); _114(*m_ptr) m_ptr++; *m_ptr = 0;
+                            }
+                            
+                            _15(opt EQ 3 AND opt_len >= 4) {
+                                _30* g_ptr = gateway_ip;
+                                int_to_str(raw_data[j+2], g_ptr); _114(*g_ptr) g_ptr++; *g_ptr++ = '.';
+                                int_to_str(raw_data[j+3], g_ptr); _114(*g_ptr) g_ptr++; *g_ptr++ = '.';
+                                int_to_str(raw_data[j+4], g_ptr); _114(*g_ptr) g_ptr++; *g_ptr++ = '.';
+                                int_to_str(raw_data[j+5], g_ptr); _114(*g_ptr) g_ptr++; *g_ptr = 0;
+                            }
+                            
+                            _15(opt EQ 6 AND opt_len >= 4) {
+                                _30* d_ptr = dns_ip;
+                                int_to_str(raw_data[j+2], d_ptr); _114(*d_ptr) d_ptr++; *d_ptr++ = '.';
+                                int_to_str(raw_data[j+3], d_ptr); _114(*d_ptr) d_ptr++; *d_ptr++ = '.';
+                                int_to_str(raw_data[j+4], d_ptr); _114(*d_ptr) d_ptr++; *d_ptr++ = '.';
+                                int_to_str(raw_data[j+5], d_ptr); _114(*d_ptr) d_ptr++; *d_ptr = 0;
+                            }
+                            j += 2 + opt_len; 
+                        }
+                          
+                        _15(msg_type EQ 2) str_cpy(cmd_status, "DHCP OFFER RX (IP GEFUNDEN!)");
+                        _41 _15(msg_type EQ 5) {
+                            str_cpy(cmd_status, "DHCP ACK RX (ONLINE!)");
+                            send_arp_ping();
+                        }
+                        _41 str_cpy(cmd_status, "DHCP RX: PROTOCOL OK");
                     }
+
+
+
                 }
             }
-            /// Ringpuffer weiterschieben (wie in deinem Original-Code)
+            /// BARE METAL FIX: Ringpuffer korrekt wrappen!
             rx_idx_rtl = (rx_idx_rtl + rx_len + 4 + 3) & ~3; 
-            _15(rx_idx_rtl > 8192) rx_idx_rtl = 0; 
+            _114(rx_idx_rtl >= 8192) rx_idx_rtl -= 8192; 
             outw(rtl_io_base + 0x38, rx_idx_rtl - 16); 
+            /// BARE METAL FIX: Interrupt-Status (ISR) IMMER bereinigen, um Stürme zu verhindern!
+            outw(rtl_io_base + 0x3E, 0xFFFF);
         }
     }
 }
@@ -821,6 +1558,67 @@ _50 rtl8139_init(_89 io_addr) {
     rtl_enable_rx(); 
     str_cpy(cmd_status, "RTL8139 READY"); str_cpy(ip_address, "DHCP (RTL)..."); 
 }
+
+extern "C" _50 send_dns_query(_71 _30* domain) {
+    _44 has_mac = _86;
+    _39(_43 k=0; k<6; k++) _15(router_mac[k] NEQ 0) has_mac = _128;
+    _15(!has_mac) {
+        send_arp_ping();
+        str_cpy(cmd_status, "WAITING FOR ARP... TRY AGAIN!");
+        str_cpy(browser_content, "ARP IS MISSING!\nWAIT 1 SEC AND PRESS ENTER AGAIN!\n");
+        return;
+    }
+
+    _15(dns_ip[0] EQ '0' AND dns_ip[1] EQ '.' AND dns_ip[2] EQ '0') {
+        _15(gateway_ip[0] NEQ '0' AND gateway_ip[0] NEQ 0) {
+            str_cpy(dns_ip, gateway_ip);
+            str_cpy(cmd_status, "DNS: FALLBACK TO GATEWAY IP!");
+        } _41 {
+            str_cpy(dns_ip, "8.8.8.8");
+            str_cpy(cmd_status, "DNS: FALLBACK TO 8.8.8.8!");
+        }
+    }
+    
+    _184 payload[512];
+    _39(_43 i=0; i<512; i++) payload[i] = 0;
+    
+    _43 idx = 0;
+    payload[idx++] = 0xAA; payload[idx++] = 0xBB; /// Transaction ID
+    payload[idx++] = 0x01; payload[idx++] = 0x00; /// Flags (Standard query)
+    payload[idx++] = 0x00; payload[idx++] = 0x01; /// Questions = 1
+    payload[idx++] = 0x00; payload[idx++] = 0x00; /// Answer RRs = 0
+    payload[idx++] = 0x00; payload[idx++] = 0x00; /// Authority RRs = 0
+    payload[idx++] = 0x00; payload[idx++] = 0x00; /// Additional RRs = 0
+    
+    /// Parse domain name to format: 3www6google3com0
+    _43 label_len_idx = idx++;
+    _184 current_len = 0;
+    
+    _43 d_idx = 0;
+    _114(domain[d_idx] NEQ 0) {
+        _184 c = domain[d_idx];
+        _15(c EQ '.') {
+            payload[label_len_idx] = current_len;
+            label_len_idx = idx++;
+            current_len = 0;
+        } _41 {
+            payload[idx++] = c;
+            current_len++;
+        }
+        d_idx++;
+    }
+    payload[label_len_idx] = current_len;
+    payload[idx++] = 0x00; /// Terminating zero
+    
+    payload[idx++] = 0x00; payload[idx++] = 0x01; /// Type A
+    payload[idx++] = 0x00; payload[idx++] = 0x01; /// Class IN
+    
+    _89 d_ip = ip_str_to_u32(dns_ip);
+    send_udp_raw(d_ip, 50000 + (random()%1000), 53, payload, idx);
+    str_cpy(cmd_status, "DNS QUERY GESENDET!");
+}
+
+extern "C" _50 parse_html();
 extern "C" _50 send_dhcp_discover() {
     /// BARE METAL FIX: Sicherheits-Check! 
     if (mac_addr[0] == 0 && mac_addr[1] == 0 && mac_addr[2] == 0) {
@@ -829,16 +1627,10 @@ extern "C" _50 send_dhcp_discover() {
     }
 
     /// ========================================================
-    /// BARE METAL FIX: DER LINK-GUARD
-    /// Verhindert, dass du sendest, bevor der Switch bereit ist.
+    /// BARE METAL FIX: LINK-GUARD ENTFERNT!
+    /// Wir pushen das DHCP-Paket immer in den TX Ring. Die Hardware
+    /// überträgt es automatisch, sobald der Link physisch steht.
     /// ========================================================
-    _15(intel_mem_base > 0) {
-        _89 status = mmio_read32(intel_mem_base + 0x0008);
-        _15((status & 0x02) EQ 0) {
-            str_cpy(cmd_status, "DHCP FEHLER: KABEL/LINK DOWN (WARTE!)");
-            return;
-        }
-    }
 
     /// Array sicher nullen
     _184* dhcp = global_dhcp_buf;
@@ -877,10 +1669,14 @@ extern "C" _50 send_dhcp_discover() {
     dhcp[opt++] = 6; /// 3. Gib mir einen DNS-Server
     /// Option 255: Ende des Pakets
     dhcp[opt++] = 255;
-    /// Absenden an Port 68 (Client) nach 67 (Server) via UDP Broadcast
+
+    /// BARE METAL FIX: Keine 30-Sekunden Freeze-Schleife mehr!
+    /// Ein langes Blockieren des OS hindert den Nutzer daran, RX-Updates zu sehen.
+    /// Wenn der Port wegen STP geblockt ist, muss der Nutzer einfach nach 10 Sekunden
+    /// nochmal auf DHCP klicken!
     send_udp_raw(0xFFFFFFFF, 68, 67, dhcp, 300);
-    /// KEIN STATUS-ÜBERSCHREIBEN MEHR HIER! 
-    /// Wir lassen "INTEL: TX PUSHED" aus der net_raw() stehen!
+    
+    str_cpy(cmd_status, "DHCP DISCOVER SENT. WAITING FOR RX...");
 }
 /// =======================================================
 /// DAS STETHOSKOP: LINK-STATUS PRÜFEN

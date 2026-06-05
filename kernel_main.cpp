@@ -7,6 +7,32 @@
 #include <stddef.h>
 
 #include "cosmos_fat32.h"
+#include "elf_loader.h"
+
+extern _44 browser_download_complete;
+extern _184 browser_download_buffer[3000000];
+extern _43 browser_download_len;
+extern _43 browser_content_length;
+extern _30 browser_url[512];
+extern "C" _50 send_dns_query(_71 _30* domain);
+extern _50 send_tcp_syn(_89 dest_ip, _182 dest_port);
+extern _89 ip_str_to_u32(_71 _30* ip_str);
+struct TCPSocket {
+    _89 remote_ip;
+    _182 local_port;
+    _182 remote_port;
+    _89 my_seq;
+    _89 my_ack;
+    _89 remote_seq;
+    _43 state; 
+};
+extern TCPSocket browser_tcp;
+
+_44 pkg_download_active = 0;
+_44 pkg_download_execute = 0;
+_89 pkg_target_ip = 0;
+_182 pkg_target_port = 80;
+void* pkg_output_win_ptr = 0;
 
 /// ==========================================
 /// BARE METAL FIX: EXTERNE LAUFWERKS-BRÜCKE
@@ -65,7 +91,7 @@ uint32_t os2_pci_read(uint32_t bus, uint32_t slot, uint32_t func, uint32_t offse
 }
 
 extern void map_mmio_64(uint64_t phys_addr);
-extern void intel_e1000_init(uint32_t mmio_addr);
+extern void intel_e1000_init(uint32_t mmio_addr, uint16_t device_id);
 
 void os2_smart_scan() {
     for (uint32_t bus = 0; bus < 256; bus++) {
@@ -82,9 +108,17 @@ void os2_smart_scan() {
                     os2_net_bar0 = os2_pci_read(bus, slot, 0, 0x10) & 0xFFFFFFF0;
                     
                     if (os2_net_bar0 != 0) {
+                        /// BARE METAL FIX: Bus Master + Memory Space aktivieren!
+                        uint32_t pci_cmd = os2_pci_read(bus, slot, 0, 0x04);
+                        uint32_t pci_addr = 0x80000000 | (bus << 16) | (slot << 11) | 0x04;
+                        __asm__ volatile("outl %0, %w1" : : "a"(pci_addr), "Nd"((uint16_t)0xCF8));
+                        __asm__ volatile("outl %0, %w1" : : "a"(pci_cmd | 0x06), "Nd"((uint16_t)0xCFC));
+                        
                         map_mmio_64(os2_net_bar0);
-                        if (os2_net_vendor == 0x8086 && os2_net_device == 0x100E) {
-                            intel_e1000_init(os2_net_bar0);
+                        /// BARE METAL FIX: Alle Intel NICs (I219-V, I217, I211, etc.)
+                        /// nutzen das gleiche E1000-Register-Layout!
+                        if (os2_net_vendor == 0x8086) {
+                            intel_e1000_init(os2_net_bar0, os2_net_device);
                         }
                     }
                     return; /// Stoppt beim ersten Netzwerkchip
@@ -107,6 +141,15 @@ void internal_test_task() {
         __asm__ volatile("int $0x80" : : "a"(0LL)); 
     }
 }
+
+/// ==========================================
+/// APP ENGINES (FROM ARCADE.CPP)
+/// ==========================================
+extern _50 run_browser_engine(_43 wx, _43 wy, _43 ww, _43 wh, _44 blocked);
+extern _50 run_pong_engine(_43 wx, _43 wy, _43 ww, _43 wh, _44 blocked);
+extern _50 run_blobby_engine(_43 wx, _43 wy, _43 ww, _43 wh, _44 blocked);
+extern _50 run_holyspirit(_43 wx, _43 wy, _43 ww, _43 wh, _44 blocked);
+extern _50 browser_handle_keyboard(_43 key_scancode, _184 ascii);
 
 /// ==========================================
 /// BARE METAL FIX: GLOBALE HARDWARE-TIMER & SCHEDULER
@@ -373,9 +416,14 @@ bool disk_read_auto(uint32_t lba, uint64_t target_ram_addr) {
         _96 ahci_read_sectors(port, lba, 1, target_ram_addr);
     }
     
-    /// FALL 2: USB MASS STORAGE (Typ 3)
+    /// FALL 2: xHCI USB MASS STORAGE (Typ 3)
     _15(type EQ 3) {
-        /// Wir zwingen den target_ram_addr (uint64_t) via Casting auf (uint8_t*)
+        /// port ist jetzt slot_id (1, 2, ...)
+        _96 xhci_bot_read_sectors((uint8_t)port, (uint32_t)lba, (uint64_t)target_ram_addr);
+    }
+    
+    /// FALL 3: UHCI USB MASS STORAGE (Typ 4)
+    _15(type EQ 4) {
         _96 usb_bot_read_sectors(port, 1, 0x82, lba, 1, (uint8_t*)target_ram_addr);
     }
     
@@ -385,6 +433,8 @@ bool disk_read_auto(uint32_t lba, uint64_t target_ram_addr) {
 /// ==========================================
 /// BARE METAL FIX: DER UNIVERSELLE WRITE-ROUTER
 /// ==========================================
+extern _44 xhci_bot_write_sectors(_184 slot_id, uint32_t lba, uint64_t dest_ram);
+
 bool disk_write_auto(uint32_t lba, uint64_t source_ram_addr) {
     _15(selected_drive_idx EQ -1) _96 _86;
     _43 type = drives[selected_drive_idx].type;
@@ -394,7 +444,19 @@ bool disk_write_auto(uint32_t lba, uint64_t source_ram_addr) {
         /// SATA schreiben!
         _96 ahci_write_sectors(port, lba, 1, source_ram_addr);
     }
-    /// (Für USB Type 3 fügen wir das später hinzu, falls du auf den Stick speichern willst)
+    
+    /// FALL 2: xHCI USB MASS STORAGE (Typ 3)
+    _15(type EQ 3) {
+        /// port ist jetzt slot_id!
+        _96 xhci_bot_write_sectors((uint8_t)port, (uint32_t)lba, (uint64_t)source_ram_addr);
+    }
+    
+    /// FALL 3: UHCI USB MASS STORAGE (Typ 4)
+    _15(type EQ 4) {
+        /// UHCI! Wir haben noch kein usb_bot_write_sectors
+        _96 _86;
+    }
+    
     _96 _86;
 }
 
@@ -503,7 +565,26 @@ extern "C" void play_hda_wav(uint32_t pcm_addr, uint32_t size_bytes, uint16_t sa
 /// ==========================================
 MemoryBlock* heap_head = nullptr;
 void init_heap() { heap_head = (MemoryBlock*)0x03000000; heap_head->size = 1024 * 1024 * 32; heap_head->is_free = 1; heap_head->next = nullptr; }
-void* malloc(size_t size) { MemoryBlock* curr = heap_head; while (curr != nullptr) { if (curr->is_free == 1 && curr->size >= size) { curr->is_free = 0; return (void*)((uint8_t*)curr + sizeof(MemoryBlock)); } curr = curr->next; } return nullptr; }
+void* malloc(size_t size) {
+    size = (size + 7) & ~7;
+    MemoryBlock* curr = heap_head;
+    while (curr != nullptr) {
+        if (curr->is_free == 1 && curr->size >= size) {
+            if (curr->size > size + sizeof(MemoryBlock) + 32) {
+                MemoryBlock* new_block = (MemoryBlock*)((uint8_t*)curr + sizeof(MemoryBlock) + size);
+                new_block->is_free = 1;
+                new_block->size = curr->size - size - sizeof(MemoryBlock);
+                new_block->next = curr->next;
+                curr->size = size;
+                curr->next = new_block;
+            }
+            curr->is_free = 0;
+            return (void*)((uint8_t*)curr + sizeof(MemoryBlock));
+        }
+        curr = curr->next;
+    }
+    return nullptr;
+}
 void free(void* ptr) { if (ptr == nullptr) return; MemoryBlock* block = (MemoryBlock*)((uint8_t*)ptr - sizeof(MemoryBlock)); block->is_free = 1; }
 void* operator new(size_t size) { return malloc(size); }
 void* operator new[](size_t size) { return malloc(size); }
@@ -762,8 +843,18 @@ void keyboard_isr(struct interrupt_frame* frame) {
     outb(0x20, 0x20); 
 }
 _30 get_ascii_qwertz(_184 sc) {
-    _30 k_low[] = { 0,27,'1','2','3','4','5','6','7','8','9','0',0,0,'\b','\t','q','w','e','r','t','z','u','i','o','p',0,0,'\n',0,'a','s','d','f','g','h','j','k','l',0,0,0,0,0,'y','x','c','v','b','n','m',',','.','-',0,0,0,' ' };
-    _15 (sc < sizeof(k_low)) _96 k_low[sc]; _96 0;
+    _30 k_low[128] = { 0 };
+    k_low[1] = 27; k_low[2] = '1'; k_low[3] = '2'; k_low[4] = '3'; k_low[5] = '4'; k_low[6] = '5'; k_low[7] = '6'; k_low[8] = '7'; k_low[9] = '8'; k_low[10] = '9'; k_low[11] = '0'; k_low[12] = '-'; k_low[13] = '='; k_low[14] = '\b'; k_low[15] = '\t';
+    k_low[16] = 'q'; k_low[17] = 'w'; k_low[18] = 'e'; k_low[19] = 'r'; k_low[20] = 't'; k_low[21] = 'z'; k_low[22] = 'u'; k_low[23] = 'i'; k_low[24] = 'o'; k_low[25] = 'p'; k_low[28] = '\n';
+    k_low[30] = 'a'; k_low[31] = 's'; k_low[32] = 'd'; k_low[33] = 'f'; k_low[34] = 'g'; k_low[35] = 'h'; k_low[36] = 'j'; k_low[37] = 'k'; k_low[38] = 'l';
+    k_low[43] = '/'; /// BARE METAL FIX: '#' is now '/'
+    k_low[44] = 'y'; k_low[45] = 'x'; k_low[46] = 'c'; k_low[47] = 'v'; k_low[48] = 'b'; k_low[49] = 'n'; k_low[50] = 'm'; k_low[51] = ','; k_low[52] = '.'; k_low[53] = '-'; k_low[55] = '*'; k_low[57] = ' ';
+    k_low[41] = '/'; /// BARE METAL FIX: '^' is now '/'
+    k_low[27] = '/'; /// BARE METAL FIX: '+' is now '/'
+    k_low[53] = '-'; /// BARE METAL FIX: '-' is '-'
+    k_low[74] = '-'; /// Numpad -
+    k_low[78] = '+'; /// Numpad +
+    if (sc < 128) return k_low[sc]; return 0;
 }
 /// ==========================================
 /// BARE METAL FIX: AHCI SATA DRIVER (32-BIT)
@@ -1292,12 +1383,23 @@ _50 DrawGlassRect(_43 x, _43 y, _43 rw, _43 rh, _43 r, _89 c) {
     }
 }
 _50 DrawChar(_43 x, _43 y, _30 c, _89 col, _44 bold) { 
+    _15(c >= 'a' AND c <= 'z') c -= 32;
     _72 _71 _184 f_u[] = { 0x7E,0x11,0x11,0x11,0x7E, 0x7F,0x49,0x49,0x49,0x36, 0x3E,0x41,0x41,0x41,0x22, 0x7F,0x41,0x41,0x22,124, 0x7F,0x49,0x49,0x49,0x41, 0x7F,0x09,0x09,0x09,0x01, 0x3E,0x41,0x49,0x49,0x7A, 0x7F,0x08,0x08,0x08,0x7F, 0x00,0x41,0x7F,0x41,0x00, 0x20,0x40,0x41,0x3F,0x01, 0x7F,0x08,0x14,0x22,0x41, 0x7F,0x40,0x40,0x40,0x40, 0x7F,0x02,0x0C,0x02,0x7F, 0x7F,0x04,0x08,0x10,0x7F, 0x3E,0x41,0x41,0x41,0x3E, 0x7F,0x09,0x09,0x09,0x06, 0x3E,0x41,0x51,0x21,0x5E, 0x7F,0x09,0x19,0x29,0x46, 0x46,0x49,0x49,0x49,0x31, 0x01,0x01,0x7F,0x01,0x01, 0x3F,0x40,0x40,0x40,0x3F, 0x1F,0x20,0x40,0x20,0x1F, 0x3F,0x40,0x38,0x40,0x3F, 0x63,0x14,0x08,0x14,0x63, 0x07,0x08,0x70,0x08,0x07, 0x61,0x51,0x49,0x45,0x43 };
     _72 _71 _184 f_n[] = { 0x3E,0x51,0x49,0x45,0x3E, 0x00,0x42,0x7F,0x40,0x00, 0x42,0x61,0x51,0x49,0x46, 0x21,0x41,0x45,0x4B,0x31, 0x18,0x14,0x12,0x7F,0x10, 0x27,0x45,0x45,0x45,0x39, 0x3C,0x4A,0x49,0x49,0x30, 0x01,0x71,0x09,0x05,0x03, 0x36,0x49,0x49,0x49,0x36, 0x06,0x49,0x49,0x29,0x1E };
     _71 _184* ptr = 0;
     _15(c >= 'A' AND c <= 'Z') ptr = &f_u[(c-'A')*5]; _41 _15(c >= '0' AND c <= '9') ptr = &f_n[(c-'0')*5];
     _41 _15(c EQ ':') { _72 _184 s[]={0,0x36,0x36,0,0}; ptr=s; }
     _41 _15(c EQ '.') { _72 _184 s[]={0,0x60,0x60,0,0}; ptr=s; }
+    _41 _15(c EQ '-') { _72 _184 s[]={0,0x08,0x08,0x08,0}; ptr=s; }
+    _41 _15(c EQ '=') { _72 _184 s[]={0,0x14,0x14,0x14,0}; ptr=s; }
+    _41 _15(c EQ '/') { _72 _184 s[]={0x20,0x10,0x08,0x04,0x02}; ptr=s; }
+    _41 _15(c EQ '<') { _72 _184 s[]={0x08,0x14,0x22,0,0}; ptr=s; }
+    _41 _15(c EQ '>') { _72 _184 s[]={0x22,0x14,0x08,0,0}; ptr=s; }
+    _41 _15(c EQ '"') { _72 _184 s[]={0,0x03,0,0x03,0}; ptr=s; }
+    _41 _15(c EQ '\'') { _72 _184 s[]={0,0x03,0,0,0}; ptr=s; }
+    _41 _15(c EQ '_') { _72 _184 s[]={0x40,0x40,0x40,0x40,0x40}; ptr=s; }
+    _41 _15(c EQ '?') { _72 _184 s[]={0x02,0x51,0x09,0x09,0x06}; ptr=s; }
+    _41 _15(c EQ '&') { _72 _184 s[]={0x3A,0x2C,0x3C,0x12,0x40}; ptr=s; }
     _15(!ptr) _96;
     _89 glow_col = (col < 0x555555) ? 0xFFFFFF : 0x000000;
     _39(_43 m=0;m<5;m++){ 
@@ -1725,8 +1827,13 @@ extern "C" _44 disk_read_auto(_89 lba, _89 target_ram_addr) {
         _96 ahci_read_sectors(port, lba, 1, target_ram_addr);
     }
     
-    /// FALL 2: USB MASS STORAGE (Typ 3)
+    /// FALL 2: xHCI USB MASS STORAGE (Typ 3)
     _15(type EQ 3) {
+        _96 xhci_bot_read_sectors((uint8_t)port, (uint32_t)lba, (uint64_t)target_ram_addr);
+    }
+    
+    /// FALL 3: UHCI USB MASS STORAGE (Typ 4)
+    _15(type EQ 4) {
         /// Standard Endpoints für USB-Sticks (EP 1 Out, EP 0x82 In)
         _96 usb_bot_read_sectors(port, 1, 0x82, lba, 1, (_184*)target_ram_addr);
     }
@@ -1824,13 +1931,28 @@ void pci_scan_all() {
                 uint32_t vendor = vendor_device & 0xFFFF;
                 uint32_t device = vendor_device >> 16;
                 
-                /// Intel E1000 Netzwerkkarte
-                if (vendor == 0x8086 && device == 0x100E) {
+                /// BARE METAL FIX: Alle Intel NICs erkennen (nicht nur QEMU 0x100E)!
+                /// I219-V, I217, I211, I210, I218 - alle nutzen das E1000 Register-Layout.
+                uint32_t nic_class = pci_read(bus, slot, func, (uint32_t)0x08);
+                uint8_t nic_cls = (nic_class >> 24) & 0xFF;
+                if (vendor == 0x8086 && nic_cls == 0x02 && e1000_mmio_base == 0) {
                     uint32_t bar0 = pci_read(bus, slot, func, (uint32_t)0x10);
-                    e1000_mmio_base = bar0 & 0xFFFFFFF0; 
+                    uint32_t clean_bar0 = bar0 & 0xFFFFFFF0;
+                    /// BARE METAL FIX: 64-Bit BAR Support (I219 nutzt 64-Bit BARs!)
+                    if ((bar0 & 0x04) != 0) {
+                        uint32_t bar1 = pci_read(bus, slot, func, (uint32_t)0x14);
+                        if (bar1 != 0) continue; /// Adresse > 4GB, koennen wir nicht mappen
+                    }
+                    e1000_mmio_base = clean_bar0;
                     if (e1000_mmio_base != 0) {
+                        /// Bus Master + Memory Space aktivieren!
+                        uint32_t pci_cmd_addr2 = 0x80000000 | (bus << 16) | (slot << 11) | (func << 8) | 0x04;
+                        outl(0xCF8, pci_cmd_addr2);
+                        uint32_t pci_cmd2 = inl(0xCFC);
+                        outl(0xCF8, pci_cmd_addr2);
+                        outl(0xCFC, pci_cmd2 | 0x06);
                         map_mmio_64(e1000_mmio_base);
-                        intel_e1000_init(e1000_mmio_base);
+                        intel_e1000_init(e1000_mmio_base, device);
                     }
                 }
                 
@@ -1991,23 +2113,8 @@ void process_cmd(char* input, Window* cmd_win) {
             print_win(cmd_win, "--------------------------------\n");
         }
     }
-    /// ECHTER HARDWARE NET-BEFEHL
-    else if(str_equal(input, "NET")) {
-        print_win(cmd_win, "ETH0 : INTEL PRO/1000 E1000\n");
-        
-        /// Echte MAC-Adresse von der Hardware holen!
-        char real_mac[20];
-        read_mac_address(real_mac);
-        
-        /// Zusammenbauen und ausdrucken
-        print_win(cmd_win, "MAC  : ");
-        print_win(cmd_win, real_mac);
-        print_win(cmd_win, "\n");
-        
-        print_win(cmd_win, "STAT : WAITING FOR LINK...\n");
-    }
-	/// ==========================================
-    /// NATIVE 64-BIT NET BEFEHL (ENTSCHÄRFT!)
+    /// ==========================================
+    /// NATIVE 64-BIT NET BEFEHL
     /// ==========================================
     else if(str_equal(input, "NET")) {
         if (os2_net_bar0 == 0) {
@@ -2045,6 +2152,12 @@ void process_cmd(char* input, Window* cmd_win) {
             else {
                 print_win(cmd_win, "TYPE : UNKNOWN ADAPTER\n");
             }
+            
+            /// DHCP Request auslösen
+            print_win(cmd_win, "STAT : WAITING FOR LINK...\n");
+            net_check_link();
+            send_dhcp_discover();
+            print_win(cmd_win, "STAT : DHCP DISCOVER SENT!\n");
         }
     }
     /// ==========================================
@@ -2133,6 +2246,68 @@ void process_cmd(char* input, Window* cmd_win) {
             print_win(cmd_win, "BACKGROUND TASK SPAWNED.\n");
         } else {
             print_win(cmd_win, "ERROR: TASK LIMIT REACHED (4/4).\n");
+        }
+    }
+    /// ==========================================
+    /// NEU: DER PAKET MANAGER (INSTALL URL / GET URL)
+    /// ==========================================
+    else if(str_starts(input, "INSTALL ") || str_starts(input, "GET ")) {
+        _44 is_install = str_starts(input, "INSTALL ");
+        if (is_install && !has_free_task_slot()) {
+            print_win(cmd_win, "ERROR: TASK LIMIT REACHED (4/4).\n");
+        } else {
+            _30 url[512];
+            _30* in_ptr = input + (is_install ? 8 : 4);
+            
+            _44 has_slash = _86;
+            for(int i=0; in_ptr[i] != 0; i++) {
+                if (in_ptr[i] == '/') has_slash = _128;
+            }
+            
+            if (has_slash) {
+                str_cpy(url, in_ptr); 
+            } else {
+                str_cpy(url, "10.0.2.2/");
+                str_cat(url, in_ptr);
+                str_cat(url, ".PKG");
+            }
+            
+            print_win(cmd_win, "RESOLVING ");
+            print_win(cmd_win, url);
+            print_win(cmd_win, "...\n");
+            
+            pkg_download_active = 1;
+            pkg_download_execute = is_install;
+            browser_download_complete = 0;
+            browser_tcp.state = 0;
+            browser_download_len = 0;
+            str_cpy(browser_url, url);
+            pkg_output_win_ptr = (void*)cmd_win;
+            if (str_starts(url, "10.0.2.2")) { pkg_target_port = 8000; } else { pkg_target_port = 80; }
+            
+            _30 query_dom[64]; _43 _qidx = 0;
+            _43 start_idx = 0;
+            _15(str_starts(browser_url, "HTTP://") || str_starts(browser_url, "http://")) start_idx = 7;
+            _41 _15(str_starts(browser_url, "HTTPS://") || str_starts(browser_url, "https://")) start_idx = 8;
+            _39(_43 k=start_idx; k<63+start_idx; k++) { _15(browser_url[k] == 0 || browser_url[k] == '/') break; query_dom[_qidx++] = browser_url[k]; }
+            query_dom[_qidx] = 0;
+            _89 target_ip = ip_str_to_u32(query_dom);
+            pkg_target_ip = target_ip;
+            
+            _15(target_ip EQ 0) {
+                send_dns_query(query_dom);
+            } _41 {
+                if (os2_net_bar0 == 0) {
+                    print_win(cmd_win, "AUTO-INIT NETWORK...\n");
+                    os2_smart_scan();
+                    net_check_link();
+                    send_dhcp_discover();
+                    
+                    // Allow hardware to settle
+                    _39(_192 _43 wait = 0; wait < 10000000; wait++) __asm__ _192("nop");
+                }
+                send_tcp_syn(target_ip, pkg_target_port);
+            }
         }
     }
     /// ==========================================
@@ -2347,7 +2522,7 @@ extern "C" void main(BootInfo* boot_info) {
     _43 map_ids[]={0,1,3,4,5}; /// Verknüpfung Planet -> Fenster ID
     _114(1) {
         handle_input();
-        //xhci_poll_events_and_mouse();
+        xhci_poll_events_and_mouse();
         _15(input_cooldown > 0) input_cooldown--;
         click_consumed = _86; z_blocked = _86; _44 mouse_handled = _86;
 
@@ -2361,6 +2536,150 @@ extern "C" void main(BootInfo* boot_info) {
         }
 
         _15(frame % 10 EQ 0) check_incoming();
+        
+        /// ==========================================
+        /// BARE METAL FIX: PACKAGE MANAGER EXECUTION
+        /// ==========================================
+        static _43 pkg_last_download_len = 0;
+        static _43 pkg_idle_frames = 0;
+        static _43 pkg_syn_retry_cooldown = 0;
+        
+        if (pkg_download_active) {
+            if (browser_tcp.state == 0) {
+                pkg_syn_retry_cooldown++;
+                if (pkg_syn_retry_cooldown > 60) {
+                    pkg_syn_retry_cooldown = 0;
+                    Window* p_win = pkg_output_win_ptr ? (Window*)pkg_output_win_ptr : &windows[5];
+                    print_win(p_win, "DEBUG: SENDING TCP SYN...\n");
+                    if (pkg_target_ip != 0) {
+                        send_tcp_syn(pkg_target_ip, pkg_target_port);
+                    } else if (browser_tcp.remote_ip != 0) {
+                        send_tcp_syn(browser_tcp.remote_ip, pkg_target_port);
+                    }
+                }
+            } else if (browser_download_complete == 0 && browser_download_len > 0) {
+                if (browser_download_len != pkg_last_download_len) {
+                    if ((browser_download_len / 1024) != (pkg_last_download_len / 1024)) {
+                        Window* p_win = pkg_output_win_ptr ? (Window*)pkg_output_win_ptr : &windows[5];
+                        print_win(p_win, "DOWNLOADING: ");
+                        _30 tmp[20];
+                        int_to_str(browser_download_len / 1024, tmp);
+                        print_win(p_win, tmp);
+                        print_win(p_win, " KB");
+                        if (browser_content_length > 0) {
+                            print_win(p_win, " / ");
+                            _30 tmp2[20];
+                            int_to_str(browser_content_length / 1024, tmp2);
+                            print_win(p_win, tmp2);
+                            print_win(p_win, " KB (");
+                            _30 tmp3[10];
+                            int_to_str((browser_download_len * 100) / browser_content_length, tmp3);
+                            print_win(p_win, tmp3);
+                            print_win(p_win, "%)");
+                        }
+                        print_win(p_win, "...\n");
+                    }
+                    pkg_last_download_len = browser_download_len;
+                    pkg_idle_frames = 0;
+                } else {
+                    pkg_idle_frames++;
+                    if (pkg_idle_frames > 60) {
+                        browser_download_complete = 1;
+                    }
+                }
+            }
+        }
+
+        if (pkg_download_active && browser_download_complete) {
+            pkg_download_active = 0;
+            Window* c_win = pkg_output_win_ptr ? (Window*)pkg_output_win_ptr : &windows[5];
+            
+            if (browser_download_len > 0) {
+                print_win(c_win, "DOWNLOAD COMPLETE. SAVING TO DISK...\n");
+            } else {
+                print_win(c_win, "DOWNLOAD FAILED: CONNECTION REFUSED!\n");
+            }
+            
+            uint32_t payload_start = 0;
+            for(uint32_t i=0; i<browser_download_len-4; i++) {
+                if (browser_download_buffer[i] == '\r' && browser_download_buffer[i+1] == '\n' &&
+                    browser_download_buffer[i+2] == '\r' && browser_download_buffer[i+3] == '\n') {
+                    payload_start = i + 4;
+                    break;
+                }
+                if (browser_download_buffer[i] == '\n' && browser_download_buffer[i+1] == '\n') {
+                    payload_start = i + 2;
+                    break;
+                }
+            }
+            
+            if (payload_start > 0 && payload_start < browser_download_len) {
+                // Finde LBA und Slot für die neue Datei
+                uint32_t next_lba = 11000;
+                int free_slot = -1;
+                for (int i = 0; i < 28; i++) {
+                    if (cfs_files[i].exists && cfs_files[i].start_lba >= next_lba) {
+                        next_lba = cfs_files[i].start_lba + ((cfs_files[i].size + 511) / 512) + 1;
+                    }
+                    if (cfs_files[i].exists == 0 && free_slot == -1) {
+                        free_slot = i;
+                    }
+                }
+
+                if (free_slot != -1) {
+                    uint32_t buf_dir = 0x00901000; 
+                    ahci_read_sectors(1002, buf_dir);
+                    sleep_ms(20);
+                    
+                    CFS_DIR_ENTRY* dir = (CFS_DIR_ENTRY*)(unsigned long long)buf_dir;
+                    dir[free_slot].type = 1;
+                    dir[free_slot].file_size = browser_download_len - payload_start;
+                    dir[free_slot].start_lba = next_lba;
+                    
+                    for(int n=0; n<11; n++) { dir[free_slot].filename[n] = 0; cfs_files[free_slot].name[n] = 0; }
+                    
+                    int slash_idx = 0;
+                    for (int k=0; k<100; k++) {
+                        if (browser_url[k] == '/') slash_idx = k + 1;
+                        if (browser_url[k] == 0) break;
+                    }
+                    str_cpy(dir[free_slot].filename, &browser_url[slash_idx]);
+                    str_cpy(cfs_files[free_slot].name, &browser_url[slash_idx]);
+                    
+                    cfs_files[free_slot].start_lba = next_lba;
+                    cfs_files[free_slot].size = dir[free_slot].file_size;
+                    cfs_files[free_slot].is_folder = _86;
+                    cfs_files[free_slot].exists = 1;
+                    
+                    ahci_write_sectors(1002, (uint64_t)buf_dir);
+                    sleep_ms(20);
+                    
+                    uint32_t payload_len = browser_download_len - payload_start;
+                    uint32_t sectors = (payload_len + 511) / 512;
+                    for (uint32_t s=0; s<sectors; s++) {
+                        uint64_t ram_addr = (uint64_t)&browser_download_buffer[payload_start + s*512];
+                        ahci_write_sectors(next_lba + s, ram_addr);
+                    }
+                    print_win(c_win, "SAVED TO VIRTUAL HDD!\n");
+                    if (pkg_download_execute) {
+                        print_win(c_win, "EXECUTING ELF...\n");
+                        uint64_t entry_point = parse_and_load_elf(&browser_download_buffer[payload_start]);
+                        if (entry_point != 0) {
+                            create_task((void (*)()) entry_point);
+                            print_win(c_win, "BINGO! ELF IS RUNNING!\n");
+                        } else {
+                            print_win(c_win, "ERROR: INVALID ELF FILE.\n");
+                        }
+                    } else {
+                        print_win(c_win, "DOWNLOAD SUCCESSFUL!\n");
+                    }
+                } else {
+                    print_win(c_win, "ERROR: DISK FULL (NO SLOTS).\n");
+                }
+            } else {
+                print_win(c_win, "ERROR: HTTP PAYLOAD NOT FOUND.\n");
+            }
+        }
         /// ==========================================
         /// ABTEILUNG: TASTATUR (BACK TO OS1 STABILITY)
         /// ==========================================
@@ -2371,6 +2690,8 @@ extern "C" void main(BootInfo* boot_info) {
             _15(!(sc & 0x80)) { /// Taste wurde GEDRÜCKT (Make Code)
                 
                 /// BARE METAL FIX: Die Taste als ASCII für unsere Apps kopieren!
+                last_app_key = get_ascii_qwertz(sc);
+                key_new = _128;
                 /// ==========================================
                 /// HIER KOMMT DEIN DEBUGGER REIN!
                 /// Er überschreibt bei JEDEM Tastendruck den Status unten rechts!
@@ -2850,6 +3171,12 @@ extern "C" void main(BootInfo* boot_info) {
             _15(win->id EQ 12) {
                 run_blobby_engine(wx, wy, ww, wh, blocked);
             }
+            /// =========================================================
+            /// APP: HOLYSPIRIT SENTINEL (ID 10)
+            /// =========================================================
+            _15(win->id EQ 10) {
+                run_holyspirit(wx, wy, ww, wh, blocked);
+            }
 			/// --- SYSTEM FENSTER ZEICHNEN (ID 3) ---
             _15(win->id EQ 3) {
                 _43 mid = wx + ww/2;
@@ -3140,6 +3467,17 @@ extern "C" void main(BootInfo* boot_info) {
                     windows[8].minimized = _86; 
                     str_cpy(windows[8].title, "WEB BROWSER"); /// Namen überschreiben
                     focus_window(8);
+                    input_cooldown = 25;
+                }
+                
+                /// --- NEU: HOLYSPIRIT SENTINEL (ID 10) ---
+                DrawRoundedRect(wx+20, wy+220, 310, 50, 5, 0x004400); 
+                TextC(wx+175, wy+237, "HOLYSPIRIT SENTINEL", 0x00FFBB, _128); 
+                _15(input_cooldown EQ 0 AND mouse_just_pressed AND !blocked AND is_over_rect(mouse_x, mouse_y, wx+20, wy+220, 310, 50)) { 
+                    windows[10].open = _128; 
+                    windows[10].minimized = _86; 
+                    str_cpy(windows[10].title, "HOLYSPIRIT V5.8"); 
+                    focus_window(10);
                     input_cooldown = 25;
                 }
             }
@@ -3572,16 +3910,11 @@ txt_color = (win->color > 0x888888) ? 0x000000 : 0xFFFFFF;
                         usb_scanned = _128;
                         print_win(win, "\n[SYS] SCANNING USB...\n");
                         find_and_init_usb();
-                        _15(usb_io_base != 0 AND drive_count < 8) {
-                            drives[drive_count].type = 3; /// Type 3 = USB
-                            drives[drive_count].base_port = (uint32_t)usb_io_base;
-                            drives[drive_count].size_mb = 0;
-                            str_cpy(drives[drive_count].model, "USB STICK");
-                            drive_count++;
-                            print_win(win, "[OK] USB DRIVE ADDED!\n");
-                        } _41 {
-                            print_win(win, "[WARN] NO USB DRIVES FOUND.\n");
-                        }
+                        
+                        /// BARE METAL FIX: Rufe den ECHTEN USB Scanner auf, der auch die Endpoints konfiguriert!
+                        extern _50 usb_scan_and_mount();
+                        usb_scan_and_mount();
+                        
                         input_cooldown = 15;
                     }
 				
@@ -3990,43 +4323,6 @@ txt_color = (win->color > 0x888888) ? 0x000000 : 0xFFFFFF;
                 Text(wx+15, prompt_y, "C:\\> ", cmd_color, _128);
                 Text(wx+55, prompt_y, cmd_input_buf, cmd_color, _128);
                 
-                /// ==========================================
-                /// TASTATUR-EINGABE & EXECUTION (Nur wenn aktiv)
-                /// ==========================================
-                _15(win_z[13] EQ win->id AND key_new) {
-                    _30 c = last_app_key;
-                    
-                    /// 1. BACKSPACE (Löschen)
-                    _15(c EQ '\b' OR c EQ 8) {
-                        _15(cmd_input_idx > 0) {
-                            cmd_input_idx--;
-                            cmd_input_buf[cmd_input_idx] = 0;
-                        }
-                    }
-                    /// 2. ENTER (Befehl abschicken!)
-                    _41 _15(c EQ '\n' OR c EQ '\r') {
-                        _15(cmd_input_idx > 0) {
-                            /// Unseren eingebauten "Fake-Befehl" mit Newline versehen
-                            _30 exec_cmd[80];
-                            str_cpy(exec_cmd, cmd_input_buf);
-                            str_cat(exec_cmd, "\n");
-                            
-                            /// ENGINE ZÜNDEN!
-                            run_cosmos_script(exec_cmd, cmd_input_idx + 1);
-                            
-                            /// Eingabezeile für den nächsten Befehl leeren
-                            cmd_input_idx = 0;
-                            cmd_input_buf[0] = 0;
-                        }
-                    }
-                    /// 3. NORMALE ZEICHEN TIPPEN
-                    _41 _15(c >= 32 AND c <= 126) {
-                        _15(cmd_input_idx < 60) {
-                            cmd_input_buf[cmd_input_idx++] = c;
-                            cmd_input_buf[cmd_input_idx] = 0;
-                        }
-                    }
-                }
             }
         }
 		// =========================================================================
@@ -4060,6 +4356,11 @@ txt_color = (win->color > 0x888888) ? 0x000000 : 0xFFFFFF;
                 }
             }
         }
+        
+        /// BARE METAL FIX: Tastatur-Ereignisse nach einem Frame verwerfen!
+        key_new = _86;
+        last_app_key = 0;
+        mouse_just_pressed = _86;
         
         Swap(); 
         frame++;

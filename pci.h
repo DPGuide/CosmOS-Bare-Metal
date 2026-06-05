@@ -5,7 +5,7 @@
 #include "schneider_lang.h"
 
 // Struktur aus kernel.cpp hierher verschoben
-_202 NICInfo { _30 name[32]; _89 address; _43 type; };
+_202 NICInfo { _30 name[32]; _89 address; _43 type; _182 device_id; };
 
 // Globale Funktionen
 _172 _89 pci_read(_184 bus, _184 slot, _184 func, _184 offset);
