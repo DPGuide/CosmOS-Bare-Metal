@@ -1,7 +1,7 @@
  ******
 ***BARE METAL cosmOS x32 & x64***
 first intel console x86
- ******<img width="796" height="596" alt="image" src="https://github.com/user-attachments/assets/3514ab69-3916-4ccb-b87c-c145ae8200f4" /> <img width="798" height="597" alt="image" src="https://github.com/user-attachments/assets/3b690c78-892c-4acc-9002-b6d8844332fe" /> <img width="793" height="596" alt="image" src="https://github.com/user-attachments/assets/72f53194-30ce-4867-9e90-ff54fcfcef21" /> <img width="792" height="600" alt="image" src="https://github.com/user-attachments/assets/9a77db13-a0f6-44e5-a72c-ff3cc535b4e5" /> <img width="793" height="601" alt="image" src="https://github.com/user-attachments/assets/94d0efb2-8292-4079-9242-f00cc8a61c30" />
+ ******<img width="796" height="596" alt="image" src="https://github.com/user-attachments/assets/3514ab69-3916-4ccb-b87c-c145ae8200f4" /> <img width="798" height="597" alt="image" src="https://github.com/user-attachments/assets/3b690c78-892c-4acc-9002-b6d8844332fe" /> <img width="793" height="596" alt="image" src="https://github.com/user-attachments/assets/72f53194-30ce-4867-9e90-ff54fcfcef21" /> 
 
 
 
