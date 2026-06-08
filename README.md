@@ -14,6 +14,7 @@ first intel console x86
   ***update***
   ***HARDWARE***
   + + ***screensize 1920x1080 (x)****
++ VIRTUAL MACHINE (UNIVERSAL EMULATOR) (/) 
 + fonts (x) [WEBBROWSER]
 + owen CFS Filesystem (working fine)  (x)
 + 2 Retro Games / Ping Pong (x) / Blobbey Volley  (x)
