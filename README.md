@@ -28,7 +28,7 @@ first intel console x86
 + WEBBROWSER / Scroll / KEY-ENTER (/)  
 + owen Decompressor (x) onliest true NEXT GEN ! All other are Fake ! (x)
 + bmp 24 bit true color (x) [jpg/png to bmp convert) (x)]
-+ SATA / USB Ramdisk / Cartridge-Architektur (/)
++ SATA -/- USB Ramdisk / Cartridge-Architektur (/) -/- (X)
 + + MBR / GPT / CFS [SATA / USB (x) / (x) ] 
 + + MBR / GPT / NFTS [SATA / USB (x) / (/) ] 
 + + MBR / GPT / FAT32 [USB (/) ] 
