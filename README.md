@@ -1,7 +1,9 @@
  ******
 ***BARE METAL cosmOS x32 & x64***
 first intel console x86
- ******<img width="796" height="596" alt="image" src="https://github.com/user-attachments/assets/3514ab69-3916-4ccb-b87c-c145ae8200f4" /> <img width="798" height="597" alt="image" src="https://github.com/user-attachments/assets/3b690c78-892c-4acc-9002-b6d8844332fe" /> <img width="793" height="596" alt="image" src="https://github.com/user-attachments/assets/72f53194-30ce-4867-9e90-ff54fcfcef21" /> <img width="796" height="602" alt="image" src="https://github.com/user-attachments/assets/28c7e539-c96c-4267-8141-17ae188a658a" /> <img width="795" height="598" alt="image" src="https://github.com/user-attachments/assets/76f6e350-2d3d-4962-8d86-c74106a1d474" /> <img width="791" height="593" alt="image" src="https://github.com/user-attachments/assets/5b8ca969-d9bf-43a6-b272-449b168ac491" />
+ ******<img width="796" height="596" alt="image" src="https://github.com/user-attachments/assets/3514ab69-3916-4ccb-b87c-c145ae8200f4" /> <img width="798" height="597" alt="image" src="https://github.com/user-attachments/assets/3b690c78-892c-4acc-9002-b6d8844332fe" /> <img width="793" height="596" alt="image" src="https://github.com/user-attachments/assets/72f53194-30ce-4867-9e90-ff54fcfcef21" /> <img width="796" height="602" alt="image" src="https://github.com/user-attachments/assets/28c7e539-c96c-4267-8141-17ae188a658a" /> 
+ ****.tba archive***
+ <img width="791" height="593" alt="image" src="https://github.com/user-attachments/assets/5b8ca969-d9bf-43a6-b272-449b168ac491" />
 
 
 
