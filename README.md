@@ -32,7 +32,6 @@ first intel console x86
 +  File-Downloader (/)
 +  Command-Line-Interpreter INSTALL (CMD) (/)
 + WEBBROWSER / Scroll | SSL 1.2 mini pass (x) 
-+ owen Decompressor (x) onliest true NEXT GEN ! All other are Fake ! (x)
 + bmp 24 bit true color (x) [jpg/png to bmp convert) (x)]
 + SATA -/- USB Ramdisk / Cartridge-Architektur (x) -/- (X)
 + + MBR / GPT / CFS [SATA / USB (x) / (x) ] 
