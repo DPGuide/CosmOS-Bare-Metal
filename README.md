@@ -31,7 +31,7 @@ first intel console x86
 +  ELF-Loader (/)
 +  File-Downloader (/)
 +  Command-Line-Interpreter INSTALL (CMD) (/)
-+ WEBBROWSER / Scroll / KEY-ENTER (x)  | SSL 1.2 mini pass (x) 
++ WEBBROWSER / Scroll | SSL 1.2 mini pass (x) 
 + owen Decompressor (x) onliest true NEXT GEN ! All other are Fake ! (x)
 + bmp 24 bit true color (x) [jpg/png to bmp convert) (x)]
 + SATA -/- USB Ramdisk / Cartridge-Architektur (/) -/- (X)
