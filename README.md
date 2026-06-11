@@ -34,7 +34,8 @@ first intel console x86
 + WEBBROWSER / Scroll | SSL 1.2 mini pass (x) <img width="195" height="44" alt="image" src="https://github.com/user-attachments/assets/38e51eeb-3412-477b-81e7-fed2e8caf583" />
 
 + bmp 24 bit true color (x) [jpg/png to bmp convert) (x)]
-+ SATA -/- USB Ramdisk / Cartridge-Architektur (x) -/- (X)
++ SATA -/- USB Ramdisk / Cartridge-Architektur (x) -/- (X) <img width="319" height="56" alt="image" src="https://github.com/user-attachments/assets/95a07e38-220f-4ea7-afba-589ca9b61629" />
+
 + + MBR / GPT / CFS [SATA / USB (x) / (x) ] 
 + + MBR / GPT / NFTS [SATA / USB (x) / (/) ] 
 + + MBR / GPT / FAT32 [USB (/) ] 
