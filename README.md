@@ -31,7 +31,8 @@ first intel console x86
 +  ELF-Loader (/)
 +  File-Downloader (/)
 +  Command-Line-Interpreter INSTALL (CMD) (/)
-+ WEBBROWSER / Scroll | SSL 1.2 mini pass (x) 
++ WEBBROWSER / Scroll | SSL 1.2 mini pass (x) <img width="195" height="44" alt="image" src="https://github.com/user-attachments/assets/38e51eeb-3412-477b-81e7-fed2e8caf583" />
+
 + bmp 24 bit true color (x) [jpg/png to bmp convert) (x)]
 + SATA -/- USB Ramdisk / Cartridge-Architektur (x) -/- (X)
 + + MBR / GPT / CFS [SATA / USB (x) / (x) ] 
