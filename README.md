@@ -41,7 +41,8 @@ first intel console x86
 + + MBR / GPT / FAT32 [USB (/) ] 
 + + MBR / GPT / exFAT [USB (/) ] 
 + + MBR / GPT / ExT [SATA / USB ( ) / ( ) ] 
-+ more stable / TASK SHEDULER ( [II] Break or [X] Close Task (x)
++ more stable / TASK SHEDULER ( [II] Break or [X] Close Task (x) <img width="446" height="78" alt="image" src="https://github.com/user-attachments/assets/658dc00a-f306-4cf5-be6f-48b039e55355" />
+
 + *.bin to run  (x)
 + *.tba images , you can make *.tba files with my Windows Mounter ! https://github.com/DPGuide/TBA-Mounter
 + 2D / 3D Grafic (x) | Surreal driver ()
