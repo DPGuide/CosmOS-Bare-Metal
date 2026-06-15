@@ -8,6 +8,8 @@ PE-Loader in work for *.exe files............***
  ******
 https://drive.google.com/file/d/1DzUTnGLbKTDwNARN-jWiyG8XABS8z-md/view?usp=sharing
  ******
+ ***HARDWARE +120 - 2xx FPS***
+ 
 <img width="1919" height="1079" alt="image" src="https://github.com/user-attachments/assets/bb00565d-1f49-4f57-8f1f-75a910480e28" />
 
 
