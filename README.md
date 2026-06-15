@@ -1,18 +1,8 @@
  ******
-***BARE METAL cosmOS x32 & x64***
+***BARE METAL cosmOS Linux HYbrid***
 first intel console x86
- ******<img width="796" height="596" alt="image" src="https://github.com/user-attachments/assets/3514ab69-3916-4ccb-b87c-c145ae8200f4" /> <img width="798" height="597" alt="image" src="https://github.com/user-attachments/assets/3b690c78-892c-4acc-9002-b6d8844332fe" />
- 
- ****.tba archive***
- 
- <img width="798" height="590" alt="image" src="https://github.com/user-attachments/assets/79fa631d-0156-4e0c-894f-70d564c5003b" /> <img width="791" height="593" alt="image" src="https://github.com/user-attachments/assets/5b8ca969-d9bf-43a6-b272-449b168ac491" />
 
-
-
-
-
-
-
+https://drive.google.com/file/d/1DzUTnGLbKTDwNARN-jWiyG8XABS8z-md/view?usp=sharing
 
  ******
 ***with RUFUS in DD MODE THE ISO or Ventoy just copy the ISO on the USB-Stick***
