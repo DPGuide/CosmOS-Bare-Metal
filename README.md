@@ -1,6 +1,6 @@
  ******
 ***BARE METAL cosmOS Linux HYbrid***
-first intel console x86
+Console x86
 
 ***this is the hybrid linux version where i use from x.org mouse, keyboard & GPU .
 all other still bare metal !
