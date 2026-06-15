@@ -5,8 +5,11 @@ first intel console x86
 ***this is the hybrid linux version where i use from x.org mouse, keyboard & GPU .
 all other still bare metal !
 PE-Loader in work for *.exe files............***
-
+ ******
 https://drive.google.com/file/d/1DzUTnGLbKTDwNARN-jWiyG8XABS8z-md/view?usp=sharing
+ ******
+<img width="1919" height="1079" alt="image" src="https://github.com/user-attachments/assets/bb00565d-1f49-4f57-8f1f-75a910480e28" />
+
 
  ******
 ***with RUFUS in DD MODE THE ISO or Ventoy just copy the ISO on the USB-Stick***
