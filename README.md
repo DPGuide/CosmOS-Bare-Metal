@@ -2,14 +2,18 @@
 ***BARE METAL cosmOS Linux HYbrid***
 first intel console x86
 
+***this is the hybrid linux version where i use from x.org mouse, keyboard & GPU .
+all other still bare metal !
+PE-Loader in work for *.exe files............***
+
 https://drive.google.com/file/d/1DzUTnGLbKTDwNARN-jWiyG8XABS8z-md/view?usp=sharing
 
  ******
 ***with RUFUS in DD MODE THE ISO or Ventoy just copy the ISO on the USB-Stick***
 <img width="497" height="721" alt="image" src="https://github.com/user-attachments/assets/c074f8c4-bd73-43d8-b329-534915a1e63e" />
   ******
-  ***update***
-  ***HARDWARE***
+  ***update / this is a longer projeckt***
+  ***HARDWARE ALL BARE METAL ONLY***
   + + ***screensize 1920x1080 (x)****
 + VIRTUAL MACHINE (UNIVERSAL EMULATOR) (/) 
 + fonts (x) [WEBBROWSER]
