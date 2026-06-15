@@ -44,7 +44,7 @@ https://drive.google.com/file/d/1DzUTnGLbKTDwNARN-jWiyG8XABS8z-md/view?usp=shari
 
 + *.bin to run  (x)
 + *.tba images , you can make *.tba files with my Windows Mounter ! https://github.com/DPGuide/TBA-Mounter
-+ 2D / 3D Grafic (x) | Surreal ENGINE ()
++ 2D / 3D Grafic (x) | Surreal ENGINE (/)
 + Sound 3.5 mm audio jack (older systems for now, its just up to youre mainboard) (x)
 + DEBUG PopUP Window [HOT KEY (F10)] (x)
  ******
