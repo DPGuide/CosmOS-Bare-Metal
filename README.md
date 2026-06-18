@@ -12,7 +12,7 @@ https://drive.google.com/file/d/1NO2AfpWJfcownFOa0mnrg5TPhbSCiDdQ/view?usp=drive
  
 <img width="1919" height="1079" alt="image" src="https://github.com/user-attachments/assets/bb00565d-1f49-4f57-8f1f-75a910480e28" />
 
-<img width="1904" height="987" alt="image" src="https://github.com/user-attachments/assets/d54adb51-12a3-43b3-a3b6-39fce7696bf5" />
+<img width="1262" height="525" alt="image" src="https://github.com/user-attachments/assets/9a27b799-8442-4323-8cbc-ea2fbed76e9a" />
 
 <img width="1905" height="987" alt="image" src="https://github.com/user-attachments/assets/cc1a538d-19c9-4da2-944a-3fcd7d845548" />
 
