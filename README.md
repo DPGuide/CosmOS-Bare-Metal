@@ -12,7 +12,13 @@ https://drive.google.com/file/d/1NO2AfpWJfcownFOa0mnrg5TPhbSCiDdQ/view?usp=drive
  
 <img width="1919" height="1079" alt="image" src="https://github.com/user-attachments/assets/bb00565d-1f49-4f57-8f1f-75a910480e28" />
 
-<img width="618" height="499" alt="image" src="https://github.com/user-attachments/assets/605f3fba-5dc5-4555-aff8-7dd76c68c195" />
+<img width="1904" height="987" alt="image" src="https://github.com/user-attachments/assets/d54adb51-12a3-43b3-a3b6-39fce7696bf5" />
+
+<img width="1905" height="987" alt="image" src="https://github.com/user-attachments/assets/cc1a538d-19c9-4da2-944a-3fcd7d845548" />
+
+<img width="1908" height="982" alt="image" src="https://github.com/user-attachments/assets/2fa6b0dc-6ef8-4411-ba03-432d755b8373" />
+
+
 
 
 
@@ -47,7 +53,7 @@ https://drive.google.com/file/d/1NO2AfpWJfcownFOa0mnrg5TPhbSCiDdQ/view?usp=drive
 
 + *.bin to run  (x)
 + *.tba images , you can make *.tba files with my Windows Mounter ! https://github.com/DPGuide/TBA-Mounter
-+ 2D / 3D Grafic (x) | Surreal ENGINE (/)
++ 2D / 3D Grafic (x) | Surreal ENGINE (/) / Game Editor (/)
 + Sound 3.5 mm audio jack (older systems for now, its just up to youre mainboard) (x)
 + DEBUG PopUP Window [HOT KEY (F10)] (x)
  ******
