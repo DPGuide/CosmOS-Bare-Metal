@@ -45,8 +45,8 @@ https://drive.google.com/file/d/1NO2AfpWJfcownFOa0mnrg5TPhbSCiDdQ/view?usp=drive
 + SATA -/- USB Ramdisk / Cartridge-Architektur (x) -/- (X) <img width="319" height="56" alt="image" src="https://github.com/user-attachments/assets/95a07e38-220f-4ea7-afba-589ca9b61629" />
 
 + + MBR / GPT / CFS [SATA / USB (x) / (x) ] 
-+ + MBR / GPT / NFTS [SATA / USB (x) / (/) ] 
-+ + MBR / GPT / FAT32 [USB (/) ] 
++ + MBR / GPT / NFTS [SATA / USB (x) / (x) ] 
++ + MBR / GPT / FAT32 [USB (x) ] 
 + + MBR / GPT / exFAT [USB (/) ] 
 + + MBR / GPT / ExT [SATA / USB ( ) / ( ) ] 
 + more stable / TASK SHEDULER ( [II] Break or [X] Close Task (x) <img width="446" height="78" alt="image" src="https://github.com/user-attachments/assets/658dc00a-f306-4cf5-be6f-48b039e55355" />
@@ -56,6 +56,7 @@ https://drive.google.com/file/d/1NO2AfpWJfcownFOa0mnrg5TPhbSCiDdQ/view?usp=drive
 + 2D / 3D Grafic (x) | Surreal ENGINE (/) / Game Editor (/)
 + Sound 3.5 mm audio jack (older systems for now, its just up to youre mainboard) (x)
 + DEBUG PopUP Window [HOT KEY (F10)] (x)
++ ***INSTALLER & UPGRADE / DOWNGRADE***
  ******
   ***kernel.cpp is OS1 x32 - kernel_main.cpp is OS2 x64***
  ******
