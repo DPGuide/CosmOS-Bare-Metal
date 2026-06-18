@@ -18,10 +18,6 @@ https://drive.google.com/file/d/1NO2AfpWJfcownFOa0mnrg5TPhbSCiDdQ/view?usp=drive
 
 <img width="1908" height="982" alt="image" src="https://github.com/user-attachments/assets/2fa6b0dc-6ef8-4411-ba03-432d755b8373" />
 
-
-
-
-
  ******
 ***with RUFUS in DD MODE THE ISO or Ventoy just copy the ISO on the USB-Stick***
 <img width="497" height="721" alt="image" src="https://github.com/user-attachments/assets/c074f8c4-bd73-43d8-b329-534915a1e63e" />
@@ -36,8 +32,8 @@ https://drive.google.com/file/d/1NO2AfpWJfcownFOa0mnrg5TPhbSCiDdQ/view?usp=drive
 + Editor Text messages (x)
 + NETWORK MAC (x) / IP (x) 1000 MBIT (x)
 + Internet Defender (x)
-+  ELF-Loader (/)
-+  File-Downloader (/)
++  ELF-Loader / PE-LOADER (x)
++  File-Downloader (x)
 +  Command-Line-Interpreter INSTALL (CMD) (/)
 + WEBBROWSER / Scroll | SSL 1.2 mini pass (x) <img width="195" height="44" alt="image" src="https://github.com/user-attachments/assets/38e51eeb-3412-477b-81e7-fed2e8caf583" />
 
@@ -56,7 +52,8 @@ https://drive.google.com/file/d/1NO2AfpWJfcownFOa0mnrg5TPhbSCiDdQ/view?usp=drive
 + 2D / 3D Grafic (x) | Surreal ENGINE (/) / Game Editor (/)
 + Sound 3.5 mm audio jack (older systems for now, its just up to youre mainboard) (x)
 + DEBUG PopUP Window [HOT KEY (F10)] (x)
-+ ***INSTALLER & UPGRADE / DOWNGRADE***
++ ***INSTALLER & UPGRADE / DOWNGRADE*** <img width="440" height="126" alt="image" src="https://github.com/user-attachments/assets/eebe124d-11dd-4074-b6de-449647c73637" />
+
  ******
   ***kernel.cpp is OS1 x32 - kernel_main.cpp is OS2 x64***
  ******
