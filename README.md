@@ -57,7 +57,7 @@ https://drive.google.com/file/d/1NO2AfpWJfcownFOa0mnrg5TPhbSCiDdQ/view?usp=drive
 + 2D / 3D Grafic (x) | Surreal ENGINE (/) / Game Editor (/) / Surreal Sound (x)
 + DEBUG PopUP Window [HOT KEY (F10)] (x)
 + ***INSTALLER & UPGRADE / DOWNGRADE*** <img width="440" height="126" alt="image" src="https://github.com/user-attachments/assets/eebe124d-11dd-4074-b6de-449647c73637" />
-+ ***UPDATER*** + + system search for the file meinos.elf or meinos.iso , on USB Stick or HARDDRIVE
++ ***UPDATER*** +++system search for the file meinos.elf or meinos.iso , on USB Stick or HARDDRIVE+++
  ******
   ***kernel.cpp is OS1 x32 - kernel_main.cpp is OS2 x64***
  ******
