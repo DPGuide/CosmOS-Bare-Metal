@@ -1,0 +1,16 @@
+CC = g++
+CFLAGS = -O2 -Wall -I. -fpermissive -Wno-int-to-pointer-cast -D__linux__ -fcommon -g -U_FORTIFY_SOURCE -fno-stack-protector
+LDFLAGS = -lSDL2 -lGL -lm -lpthread
+
+OBJS = linux_main.o kernel_linux.o kernel_main_linux.o app.o arcade.o surreal_gl.o linux_stubs.o linux_stubs2.o
+
+all: meinos.elf
+
+%.o: %.cpp
+	$(CC) $(CFLAGS) -c $< -o $@
+
+meinos.elf: $(OBJS)
+	$(CC) $(CFLAGS) -o $@ $(OBJS) $(LDFLAGS)
+
+clean:
+	rm -f *.o meinos.elf
