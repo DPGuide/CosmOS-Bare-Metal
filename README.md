@@ -2,9 +2,14 @@
 ***BARE METAL cosmOS Linux HYbrid***
 Console x86
 
+***First Pre-Release***
+
 ***this is the hybrid linux version where i use from x.org mouse, keyboard & GPU .
 all other still bare metal !
 PE-Loader in work for *.exe files............***
+
+
+***First Pre-Release***
  ******
 https://drive.google.com/file/d/1NO2AfpWJfcownFOa0mnrg5TPhbSCiDdQ/view?usp=drive_link
  ******
