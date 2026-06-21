@@ -4,9 +4,7 @@ Console x86
 
 ***First Pre-Release***
 
-***this is the hybrid linux version where i use from x.org mouse, keyboard & GPU .
-all other still bare metal !
-PE-Loader in work for *.exe files............***
+***this is the Bare MEtal - hybrid linux version***
 
 
 ***First Pre-Release***
