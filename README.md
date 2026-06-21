@@ -14,14 +14,8 @@ PE-Loader in work for *.exe files............***
 https://drive.google.com/file/d/1NO2AfpWJfcownFOa0mnrg5TPhbSCiDdQ/view?usp=drive_link ***First Pre-Release***
  ******
  ***HARDWARE +120 - 2xx FPS***
- 
-<img width="1919" height="1079" alt="image" src="https://github.com/user-attachments/assets/bb00565d-1f49-4f57-8f1f-75a910480e28" />
 
-<img width="1262" height="525" alt="image" src="https://github.com/user-attachments/assets/9a27b799-8442-4323-8cbc-ea2fbed76e9a" />
-
-<img width="1905" height="987" alt="image" src="https://github.com/user-attachments/assets/cc1a538d-19c9-4da2-944a-3fcd7d845548" />
-
-<img width="1908" height="982" alt="image" src="https://github.com/user-attachments/assets/2fa6b0dc-6ef8-4411-ba03-432d755b8373" />
+ 1
 
  ******
 ***with RUFUS in DD MODE THE ISO or Ventoy just copy the ISO on the USB-Stick***
