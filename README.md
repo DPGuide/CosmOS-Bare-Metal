@@ -31,23 +31,23 @@ https://drive.google.com/file/d/1NO2AfpWJfcownFOa0mnrg5TPhbSCiDdQ/view?usp=drive
 +  ELF-Loader / PE-LOADER (x)
 +  File-Downloader (x)
 +  Command-Line-Interpreter INSTALL (CMD) (/)
-+ WEBBROWSER / Scroll | SSL 1.2 mini pass (x) <img width="195" height="44" alt="image" src="https://github.com/user-attachments/assets/38e51eeb-3412-477b-81e7-fed2e8caf583" />
++ WEBBROWSER / Scroll | SSL 1.2 mini pass (x) 
 
 + bmp 24 bit true color (x) [jpg/png to bmp convert) (x)]
-+ SATA -/- USB Ramdisk / Cartridge-Architektur (x) -/- (X) <img width="319" height="56" alt="image" src="https://github.com/user-attachments/assets/95a07e38-220f-4ea7-afba-589ca9b61629" />
++ SATA -/- USB Ramdisk / Cartridge-Architektur (x) -/- (X) 
 
 + + MBR / GPT / CFS [SATA / USB (x) / (x) ] 
 + + MBR / GPT / NFTS [SATA / USB (x) / (x) ] 
 + + MBR / GPT / FAT32 [USB (x) ] 
 + + MBR / GPT / exFAT [USB (/) ] 
 + + MBR / GPT / ExT [SATA / USB ( ) / ( ) ] 
-+ more stable / TASK SHEDULER ( [II] Break or [X] Close Task (x) <img width="446" height="78" alt="image" src="https://github.com/user-attachments/assets/658dc00a-f306-4cf5-be6f-48b039e55355" />
++ more stable / TASK SHEDULER ( [II] Break or [X] Close Task (x) 
 
 + *.bin to run  (x)
 + *.tba images , you can make *.tba files with my Windows Mounter ! https://github.com/DPGuide/TBA-Mounter
 + 2D / 3D Grafic (x) | Surreal ENGINE (/) / Game Editor (/) / Surreal Sound (x)
 + DEBUG PopUP Window [HOT KEY (F10)] (x)
-+ ***INSTALLER & UPGRADE / DOWNGRADE*** <img width="610" height="205" alt="image" src="https://github.com/user-attachments/assets/b5a99bb8-1d7d-423b-b82f-1134b6df0d87" />
++ ***INSTALLER & UPGRADE / DOWNGRADE*** 
 
 + ***UPDATER*** +++system search for the file meinos.elf or meinos.iso , on USB Stick or HARDDRIVE+++
  ******
