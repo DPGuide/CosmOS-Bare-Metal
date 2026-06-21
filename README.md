@@ -17,10 +17,6 @@ https://drive.google.com/file/d/1NO2AfpWJfcownFOa0mnrg5TPhbSCiDdQ/view?usp=drive
  ******
 ***with RUFUS in DD MODE THE ISO or Ventoy just copy the ISO on the USB-Stick***
 <img width="497" height="721" alt="image" src="https://github.com/user-attachments/assets/c074f8c4-bd73-43d8-b329-534915a1e63e" />
-  ******
-  ***update / this is a longer projeckt***
-  ***HARDWARE ALL BARE METAL ONLY***
- 
  ******
   ***kernel.cpp is OS1 x32 - kernel_main.cpp is OS2 x64***
  ******
