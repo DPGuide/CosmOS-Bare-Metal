@@ -15,7 +15,8 @@ https://drive.google.com/file/d/1NO2AfpWJfcownFOa0mnrg5TPhbSCiDdQ/view?usp=drive
  ******
  ***HARDWARE +120 - 2xx FPS***
 
- 1
+<img width="1910" height="1052" alt="image" src="https://github.com/user-attachments/assets/ff1b443e-efb0-449d-811e-41e2defc0a4e" />
+
 
  ******
 ***with RUFUS in DD MODE THE ISO or Ventoy just copy the ISO on the USB-Stick***
