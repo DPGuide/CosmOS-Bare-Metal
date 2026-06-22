@@ -1,5 +1,5 @@
  ******
-***BARE METAL cosmOS Linux HYbrid***
+***BARE METAL CosmOS / Linux HYbrid***
 + Console x86
 + + ***First Pre-Release***
 + + + ***this is the Bare MEtal - hybrid linux version***
