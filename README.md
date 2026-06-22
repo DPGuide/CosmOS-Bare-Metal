@@ -1,13 +1,8 @@
  ******
-
-<img width="1910" height="1052" alt="image" src="https://github.com/user-attachments/assets/ff1b443e-efb0-449d-811e-41e2defc0a4e" />
- 
 ***BARE METAL cosmOS Linux HYbrid***
 + Console x86
 + + ***First Pre-Release***
 + + + ***this is the Bare MEtal - hybrid linux version***
-
-
 ***First Pre-Release***
  ******
 https://drive.google.com/file/d/1NO2AfpWJfcownFOa0mnrg5TPhbSCiDdQ/view?usp=drive_link ***First Pre-Release***
