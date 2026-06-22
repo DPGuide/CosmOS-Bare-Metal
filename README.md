@@ -4,7 +4,7 @@
 + + ***First Pre-Release***
 + + + ***this is the Bare MEtal - hybrid linux version***
 + + ***TOOLS***
-+  pipewire, xterm ,gparted, pcmanfm, xfce4-termina,l mpv wget
++  pipewire, xterm ,gparted, pcmanfm, xfce4-termina,l mpv, wget, firefox
    
 ***First Pre-Release***
  ******
