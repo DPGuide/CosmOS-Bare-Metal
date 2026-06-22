@@ -3,6 +3,14 @@
 + Console x86
 + + ***First Pre-Release***
 + + + ***this is the Bare MEtal - hybrid linux version***
++ + ***TOOLS***
++ systemd-sysv alsa-utils pipewire pipewire-pulse \
+    xserver-xorg xserver-xorg-video-all xserver-xorg-input-all xinit \
+    libsdl2-2.0-0 libgl1-mesa-dri libglx-mesa0 x11-xserver-utils ifupdown linux-firmware \
+    xterm rsync os-prober parted sudo dosfstools ntfs-3g efibootmgr blueman xfce4-screenshooter \
+    openbox grub-pc-bin grub-efi-amd64-bin grub2-common wpasupplicant \
+    gparted pcmanfm xfce4-terminal mpv wget ca-certificates
+   
 ***First Pre-Release***
  ******
 https://drive.google.com/file/d/1NO2AfpWJfcownFOa0mnrg5TPhbSCiDdQ/view?usp=drive_link ***First Pre-Release***
