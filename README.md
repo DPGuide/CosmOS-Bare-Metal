@@ -14,7 +14,7 @@ https://drive.google.com/file/d/1NO2AfpWJfcownFOa0mnrg5TPhbSCiDdQ/view?usp=drive
 
 
  ******
-***Format ISO to the USB Stick with RUFUS or Ventoy (no more DD format)***
+***Format ISO to the USB Stick with RUFUS (DD format) or Ventoy***
 + updates with ,meinos.elf or clean install
  ******
 
